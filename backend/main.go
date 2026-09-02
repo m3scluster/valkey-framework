@@ -120,22 +120,35 @@ func (s *Scheduler) save() {
 	_ = s.state.Set(context.Background(), s.cfg.Name+":state", b, 0).Err()
 }
 func (s *Scheduler) load() {
+	// Redis is the durable source of truth when it contains a valid state.
+	// The local file remains a fallback for startup while Redis is unavailable.
+	if b, err := s.state.Get(context.Background(), s.cfg.Name+":state").Result(); err == nil {
+		if s.restoreState([]byte(b)) {
+			return
+		}
+	}
 	b, e := os.ReadFile(s.cfg.StateFile)
 	if e != nil {
 		return
 	}
+	s.restoreState(b)
+}
+
+func (s *Scheduler) restoreState(b []byte) bool {
 	var v struct {
 		FrameworkID string           `json:"framework_id"`
 		Desired     bool             `json:"desired"`
 		Tasks       map[string]*Task `json:"tasks"`
 	}
-	if json.Unmarshal(b, &v) == nil {
-		s.frameworkID = v.FrameworkID
-		s.desired = v.Desired
-		if v.Tasks != nil {
-			s.tasks = v.Tasks
-		}
+	if json.Unmarshal(b, &v) != nil {
+		return false
 	}
+	s.frameworkID = v.FrameworkID
+	s.desired = v.Desired
+	if v.Tasks != nil {
+		s.tasks = v.Tasks
+	}
+	return true
 }
 func scalar(name string, v float64) lib.Resource {
 	typeValue := lib.SCALAR
@@ -176,6 +189,7 @@ func (s *Scheduler) nextRole() string {
 			return r
 		}
 	}
+
 	return ""
 }
 func (s *Scheduler) checkOfferResources(o lib.Offer) bool {

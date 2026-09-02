@@ -2,7 +2,9 @@ package main
 
 import (
 	lib "github.com/mesos/mesos-go/api/v1/lib"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
@@ -29,6 +31,31 @@ func TestRecordFrameworkIDPersistsLatestSubscribedID(t *testing.T) {
 	}
 	if s.recordFrameworkID("framework-1") {
 		t.Fatal("unchanged framework ID must not be reported as changed")
+	}
+}
+
+func TestRestoreStateRestoresFrameworkAndTasks(t *testing.T) {
+	s := &Scheduler{tasks: map[string]*Task{}}
+	b := []byte(`{"framework_id":"framework-redis","desired":true,"tasks":{"master-1":{"ID":"master-1","Role":"master","State":"TASK_RUNNING","Updated":"2026-01-01T00:00:00Z"}}}`)
+	if !s.restoreState(b) {
+		t.Fatal("valid persisted state must be restored")
+	}
+	if s.frameworkID != "framework-redis" || !s.desired {
+		t.Fatalf("restored scheduler metadata = (%q, %v)", s.frameworkID, s.desired)
+	}
+	want := &Task{ID: "master-1", Role: "master", State: "TASK_RUNNING", Updated: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	if !reflect.DeepEqual(s.tasks["master-1"], want) {
+		t.Fatalf("restored task = %#v, want %#v", s.tasks["master-1"], want)
+	}
+}
+
+func TestRestoreStateRejectsInvalidJSON(t *testing.T) {
+	s := &Scheduler{frameworkID: "keep", desired: true, tasks: map[string]*Task{"existing": {ID: "existing"}}}
+	if s.restoreState([]byte("not-json")) {
+		t.Fatal("invalid persisted state must be rejected")
+	}
+	if s.frameworkID != "keep" || !s.desired || len(s.tasks) != 1 {
+		t.Fatalf("invalid state changed scheduler: %#v", s)
 	}
 }
 

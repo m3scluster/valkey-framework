@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
-	"github.com/m3scluster/clusterd-go/api/v1/lib/extras/scheduler/controller"
-	httpcli "github.com/m3scluster/clusterd-go/api/v1/lib/httpcli"
-	httpsched "github.com/m3scluster/clusterd-go/api/v1/lib/httpcli/httpsched"
-	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
-	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler/calls"
+	lib "github.com/mesos/mesos-go/api/v1/lib"
+	"github.com/mesos/mesos-go/api/v1/lib/extras/scheduler/controller"
+	httpcli "github.com/mesos/mesos-go/api/v1/lib/httpcli"
+	httpsched "github.com/mesos/mesos-go/api/v1/lib/httpcli/httpsched"
+	"github.com/mesos/mesos-go/api/v1/lib/scheduler"
+	"github.com/mesos/mesos-go/api/v1/lib/scheduler/calls"
 	"github.com/redis/go-redis/v9"
 	logrus "github.com/sirupsen/logrus"
 )
@@ -138,7 +138,8 @@ func (s *Scheduler) load() {
 	}
 }
 func scalar(name string, v float64) lib.Resource {
-	return lib.Resource{Name: name, Type: lib.Value_SCALAR, Scalar: &lib.Value_Scalar{Value: v}}
+	typeValue := lib.SCALAR
+	return lib.Resource{Name: name, Type: &typeValue, Scalar: &lib.Value_Scalar{Value: v}}
 }
 func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	cmd := fmt.Sprintf("valkey-server --port %d", s.cfg.Port)
@@ -156,7 +157,7 @@ func (s *Scheduler) nextRole() string {
 	defer s.mu.Unlock()
 	master := false
 	for _, t := range s.tasks {
-		if t.Role == "master" && t.State != "TASK_FAILED" && t.State != "TASK_LOST" {
+		if t.Role == "master" && t.State == "TASK_RUNNING" {
 			master = true
 		}
 	}
@@ -191,13 +192,9 @@ func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
 	for _, resource := range o.Resources {
 		switch resource.GetName() {
 		case "cpus":
-			if v, ok := resource.GetScalar().GetValue(); ok {
-				actualCPU += v
-			}
+			actualCPU += resource.GetScalar().GetValue()
 		case "mem":
-			if v, ok := resource.GetScalar().GetValue(); ok {
-				actualMem += v
-			}
+			actualMem += resource.GetScalar().GetValue()
 		}
 	}
 

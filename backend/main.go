@@ -264,9 +264,6 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 		}
 		s.mu.Unlock()
 		s.save()
-		if len(st.UUID) > 0 {
-			_ = calls.CallNoData(ctx, s.caller, calls.Acknowledge(st.AgentID.Value, st.TaskID.Value, st.UUID))
-		}
 	}
 	return nil
 }
@@ -294,7 +291,7 @@ func (s *Scheduler) start() {
 				s.runCancel = nil
 				s.mu.Unlock()
 			}()
-			if e := controller.Run(ctx, s.framework, s.caller, controller.WithEventHandler(eventHandler{s}), controller.WithFrameworkID(func() string {
+			if e := controller.Run(ctx, s.framework, s.caller, controller.WithEventHandler(controller.AckStatusUpdates(s.caller).AndThen().Handle(eventHandler{s})), controller.WithFrameworkID(func() string {
 				return s.currentFrameworkID()
 			}), controller.WithSubscriptionTerminated(func(e error) {
 				if e != nil {

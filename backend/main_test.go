@@ -18,3 +18,16 @@ func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
 		t.Fatalf("missing CNI network: %#v", task.Container.NetworkInfos)
 	}
 }
+
+func TestRecordFrameworkIDPersistsLatestSubscribedID(t *testing.T) {
+	s := &Scheduler{}
+	if !s.recordFrameworkID("framework-1") {
+		t.Fatal("first SUBSCRIBED framework ID must be recorded")
+	}
+	if got := s.currentFrameworkID(); got != "framework-1" {
+		t.Fatalf("recorded framework ID = %q, want framework-1", got)
+	}
+	if s.recordFrameworkID("framework-1") {
+		t.Fatal("unchanged framework ID must not be reported as changed")
+	}
+}

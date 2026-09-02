@@ -44,6 +44,8 @@ type Scheduler struct {
 	state       *redis.Client
 	caller      calls.Caller
 	framework   *lib.FrameworkInfo
+	runCancel   context.CancelFunc
+	running     bool
 }
 
 func env(k, d string) string {
@@ -95,6 +97,20 @@ func NewScheduler(c Config) *Scheduler {
 	s := &Scheduler{cfg: c, tasks: map[string]*Task{}, state: redis.NewClient(&redis.Options{Addr: c.RedisServer, Password: c.RedisPassword, DB: c.RedisDB}), caller: httpsched.NewCaller(cli), framework: &lib.FrameworkInfo{User: c.User, Name: c.Name, Role: &role, FailoverTimeout: &ft}}
 	s.load()
 	return s
+}
+func (s *Scheduler) currentFrameworkID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.frameworkID
+}
+func (s *Scheduler) recordFrameworkID(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.frameworkID == id {
+		return false
+	}
+	s.frameworkID = id
+	return true
 }
 func (s *Scheduler) save() {
 	s.mu.Lock()
@@ -161,8 +177,49 @@ func (s *Scheduler) nextRole() string {
 	}
 	return ""
 }
+func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
+	// Check if offer has sufficient CPU and memory for this task
+
+	// Get required CPU and Memory from config
+	requiredCPU := s.cfg.CPU
+	requiredMem := s.cfg.Memory
+
+	// Find actual CPU and Memory in the offer's resources
+	actualCPU := 0.0
+	actualMem := 0.0
+
+	for _, resource := range o.Resources {
+		switch resource.GetName() {
+		case "cpus":
+			if v, ok := resource.GetScalar().GetValue(); ok {
+				actualCPU += v
+			}
+		case "mem":
+			if v, ok := resource.GetScalar().GetValue(); ok {
+				actualMem += v
+			}
+		}
+	}
+
+	// Check if offer has sufficient CPU and Memory
+	if actualCPU < requiredCPU || actualMem < requiredMem {
+		return false
+	}
+
+	return true
+}
+
 func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 	switch e.GetType() {
+	case scheduler.Event_SUBSCRIBED:
+		frameworkID := e.GetSubscribed().GetFrameworkID().GetValue()
+		if frameworkID == "" {
+			return fmt.Errorf("mesos sent an empty framework ID")
+		}
+		changed := s.recordFrameworkID(frameworkID)
+		if changed {
+			s.save()
+		}
 	case scheduler.Event_OFFERS:
 		for _, o := range e.GetOffers().GetOffers() {
 			role := s.nextRole()
@@ -170,6 +227,13 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 				_ = calls.CallNoData(ctx, s.caller, calls.Decline(o.ID).With(calls.RefuseSeconds(180*time.Second)))
 				continue
 			}
+
+			// Check if offer has sufficient CPU and Memory resources
+			if !s.checkOfferResources(o) {
+				_ = calls.CallNoData(ctx, s.caller, calls.Decline(o.ID).With(calls.RefuseSeconds(5*time.Second)))
+				continue
+			}
+
 			id := fmt.Sprintf("%s-%d", role, time.Now().UnixNano())
 			ti := s.buildTaskInfo(role, id, o)
 			err := calls.CallNoData(ctx, s.caller, calls.Accept(calls.OfferOperations{calls.OpLaunch(ti)}.WithOffers(o.ID)).With(calls.RefuseSeconds(5*time.Second)))
@@ -197,12 +261,31 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 }
 func (s *Scheduler) start() {
 	s.mu.Lock()
+	if s.running {
+		s.desired = true
+		s.mu.Unlock()
+		s.save()
+		return
+	}
 	s.desired = true
+	var ctx context.Context
+	if !s.cfg.DryRun {
+		ctx, s.runCancel = context.WithCancel(context.Background())
+		s.running = true
+	}
 	s.mu.Unlock()
 	s.save()
 	if !s.cfg.DryRun {
 		go func() {
-			if e := controller.Run(context.Background(), s.framework, s.caller, controller.WithEventHandler(eventHandler{s}), controller.WithFrameworkID(func() string { return s.frameworkID }), controller.WithSubscriptionTerminated(func(e error) {
+			defer func() {
+				s.mu.Lock()
+				s.running = false
+				s.runCancel = nil
+				s.mu.Unlock()
+			}()
+			if e := controller.Run(ctx, s.framework, s.caller, controller.WithEventHandler(eventHandler{s}), controller.WithFrameworkID(func() string {
+				return s.currentFrameworkID()
+			}), controller.WithSubscriptionTerminated(func(e error) {
 				if e != nil {
 					logrus.WithError(e).Error("scheduler stopped")
 				}
@@ -212,7 +295,15 @@ func (s *Scheduler) start() {
 		}()
 	}
 }
-func (s *Scheduler) stop() { s.mu.Lock(); s.desired = false; s.mu.Unlock(); s.save() }
+func (s *Scheduler) stop() {
+	s.mu.Lock()
+	s.desired = false
+	if s.runCancel != nil {
+		s.runCancel()
+	}
+	s.mu.Unlock()
+	s.save()
+}
 
 type eventHandler struct{ s *Scheduler }
 

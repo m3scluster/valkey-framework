@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"os"
 	"sync"
 	"testing"
 
@@ -36,7 +34,7 @@ func (c *recordingCaller) snapshot() []*scheduler.Call {
 
 func testScheduler(caller calls.Caller) *Scheduler {
 	return &Scheduler{
-		cfg:    Config{CPU: 0.2, Memory: 128, Image: "valkey:test", CNI: "weave", MasterHost: "valkey-framework.mesos", Port: 6379, Slaves: 1, StateFile: "/tmp/valkey-mesos-lifecycle-test.json"},
+		cfg:    Config{CPU: 0.2, Memory: 128, Image: "valkey:test", CNI: "weave", MasterHost: "valkey-framework.mesos", Port: 6379, Slaves: 1},
 		tasks:  map[string]*Task{},
 		state:  redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}),
 		caller: caller,
@@ -155,11 +153,9 @@ func TestAckStatusUpdateSendsAcknowledgeCall(t *testing.T) {
 	}
 }
 
-func TestTerminalStatusUpdateRemovesTaskAndPersistsCleanup(t *testing.T) {
+func TestTerminalStatusUpdateRemovesTask(t *testing.T) {
 	caller := &recordingCaller{}
-	stateFile := t.TempDir() + "/state.json"
 	s := testScheduler(caller)
-	s.cfg.StateFile = stateFile
 	s.tasks["slave-1"] = &Task{ID: "slave-1", Role: "slave-1", State: "TASK_RUNNING"}
 	state := lib.TASK_LOST
 
@@ -177,17 +173,4 @@ func TestTerminalStatusUpdateRemovesTaskAndPersistsCleanup(t *testing.T) {
 		t.Fatal("terminal task must be removed from the in-memory task set")
 	}
 
-	persisted, err := os.ReadFile(stateFile)
-	if err != nil {
-		t.Fatalf("read persisted state: %v", err)
-	}
-	var snapshot struct {
-		Tasks map[string]*Task `json:"tasks"`
-	}
-	if err := json.Unmarshal(persisted, &snapshot); err != nil {
-		t.Fatalf("decode persisted state: %v", err)
-	}
-	if len(snapshot.Tasks) != 0 {
-		t.Fatalf("persisted terminal tasks = %#v, want empty", snapshot.Tasks)
-	}
 }

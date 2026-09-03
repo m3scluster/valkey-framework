@@ -25,12 +25,12 @@ import (
 )
 
 type Config struct {
-	Master, Image, Role, Name, User, StateFile, RedisServer, CNI, Domain, MasterHost, Listen string
-	Password, RedisPassword                                                                  string
-	RedisDB, Slaves                                                                          int
-	CPU, Memory                                                                              float64
-	Port                                                                                     int
-	DryRun, InsecureTLS                                                                      bool
+	Master, Image, Role, Name, User, RedisServer, CNI, Domain, MasterHost, Listen string
+	Password, RedisPassword                                                       string
+	RedisDB, Slaves                                                               int
+	CPU, Memory                                                                   float64
+	Port                                                                          int
+	DryRun, InsecureTLS                                                           bool
 }
 
 // This model supports one master and requires at least one replica. Keep the
@@ -128,7 +128,7 @@ func loadConfig() Config {
 	if slaves < minSlaves {
 		slaves = minSlaves
 	}
-	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), StateFile: env("STATE_FILE", "/tmp/valkey-mesos.json"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
+	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(env(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
@@ -177,24 +177,18 @@ func (s *Scheduler) save() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, _ := json.Marshal(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "tasks": s.tasks, "config": s.cfg})
-	_ = os.WriteFile(s.cfg.StateFile, b, 0600)
 	if s.state != nil {
 		_ = s.state.Set(context.Background(), s.cfg.Name+":state", b, 0).Err()
 	}
 }
 func (s *Scheduler) load() {
-	// Redis is the durable source of truth when it contains a valid state.
-	// The local file remains a fallback for startup while Redis is unavailable.
-	if b, err := s.state.Get(context.Background(), s.cfg.Name+":state").Result(); err == nil {
-		if s.restoreState([]byte(b)) {
-			return
-		}
-	}
-	b, e := os.ReadFile(s.cfg.StateFile)
-	if e != nil {
+	// Redis is the only durable source of truth.
+	if s.state == nil {
 		return
 	}
-	s.restoreState(b)
+	if b, err := s.state.Get(context.Background(), s.cfg.Name+":state").Result(); err == nil {
+		s.restoreState([]byte(b))
+	}
 }
 
 func (s *Scheduler) restoreState(b []byte) bool {

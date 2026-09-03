@@ -15,7 +15,6 @@ Eigenständiges Apache-Mesos-v1-Framework, das einen Valkey-Master und konfiguri
 - `MESOS_DRY_RUN=true` für lokale Prüfung ohne Mesos
 - Redis-State mit konfigurierbarem Server und DB; standardmäßig `redis.weave.local:6379`, DB `10`
 - Logrus-Meldungen mit `LOG_LEVEL=debug|info|error`, Standard: `info`
-- Status-Snapshot mit `0600`-Rechten; keine Passwörter im Snapshot
 
 ## Bauen und lokal prüfen
 
@@ -47,7 +46,6 @@ export VALKEY_SLAVES=2
 export VALKEY_IMAGE=valkey/valkey:8-alpine
 export VALKEY_CPU=0.2
 export VALKEY_MEMORY_MB=256
-export STATE_FILE=/var/lib/valkey-mesos/state.json
 ./valkey-mesos-framework
 ```
 

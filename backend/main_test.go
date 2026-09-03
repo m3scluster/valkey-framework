@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -158,9 +157,8 @@ func TestMetricsEndpointCountsTaskStates(t *testing.T) {
 	}
 }
 
-func TestScaleEndpointValidatesAndPersistsTarget(t *testing.T) {
-	stateFile := t.TempDir() + "/state.json"
-	s := &Scheduler{cfg: Config{Name: "test", Slaves: 2, StateFile: stateFile}, tasks: map[string]*Task{}}
+func TestScaleEndpointValidatesAndUpdatesTarget(t *testing.T) {
+	s := &Scheduler{cfg: Config{Name: "test", Slaves: 2}, tasks: map[string]*Task{}}
 	handler := s.handler()
 
 	invalid := httptest.NewRecorder()
@@ -174,11 +172,6 @@ func TestScaleEndpointValidatesAndPersistsTarget(t *testing.T) {
 	if valid.Code != http.StatusAccepted || s.cfg.Slaves != 4 {
 		t.Fatalf("valid scale: status=%d slaves=%d", valid.Code, s.cfg.Slaves)
 	}
-	persisted, err := os.ReadFile(stateFile)
-	if err != nil || !strings.Contains(string(persisted), `"Slaves":4`) {
-		t.Fatalf("scaled target was not persisted: err=%v state=%s", err, persisted)
-	}
-
 	status := httptest.NewRecorder()
 	handler.ServeHTTP(status, httptest.NewRequest("GET", "/api/status", nil))
 	var got struct {

@@ -39,8 +39,10 @@ export REDIS_SERVER=redis.weave.local:6379
 export REDIS_DB=10
 # optional: export REDIS_PASSWORD='aus sicherer Laufzeitumgebung'
 export MESOS_CNI=weave
-# Standard ist: <FRAMEWORK_NAME>.mesos
-# optional: export VALKEY_MASTER_HOST=valkey-framework.mesos
+export MESOS_DOMAIN=mesos
+export MESOS_DNS_SERVER=172.17.0.1
+# Standard ist: master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>
+# optional: export VALKEY_MASTER_HOST=master.valkey-framework.mesos
 export MESOS_ROLE='*'
 export VALKEY_SLAVES=2
 export VALKEY_IMAGE=valkey/valkey:8-alpine
@@ -54,7 +56,7 @@ export STATE_FILE=/var/lib/valkey-mesos/state.json
 
 ## Wichtige Einschränkung
 
-Das Framework weist Tasks auf Mesos-Agenten zu und fordert das konfigurierte Mesos-CNI-Netzwerk an. Es werden keine Mesos-Port-Ressourcen und keine Docker-Port-Mappings angefordert. Für die Namensauflösung wird Mesos-DNS verwendet: Der Master wird als `master.<FRAMEWORK_NAME>.mesos` veröffentlicht. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
+Das Framework weist Tasks auf Mesos-Agenten zu. Wenn `MESOS_CNI` gesetzt ist, wird das konfigurierte Mesos-CNI-Netzwerk angefordert; bei leerem Wert wird keine CNI-Netzwerk-Information gesendet und Docker verwendet sein Standardnetzwerk. Für die Namensauflösung wird Mesos-DNS verwendet: Der Master wird als `master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>` veröffentlicht. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
 
 `/api/stop` beendet aktuell die gewünschte Bereitstellung und verhindert weitere Starts. Das tatsächliche Killen bereits laufender Tasks kann über die native Mesos-Kill-API ergänzt werden, sobald das gewünschte Betriebsmodell (persistente Daten/Volumes und Failover) festgelegt ist.
 

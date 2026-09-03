@@ -47,6 +47,30 @@ func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
 	}
 }
 
+func TestBuildTaskInfoWithoutCNIUsesHostNetworking(t *testing.T) {
+	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "", MasterHost: "master.test.mesos"})
+	task := s.buildTaskInfo("master", "task-1", lib.Offer{AgentID: lib.AgentID{Value: "agent-1"}})
+	if task.Container.Docker.GetNetwork() != lib.ContainerInfo_DockerInfo_HOST || len(task.Container.NetworkInfos) != 0 {
+		t.Fatalf("no-CNI task must use host networking without NetworkInfos: %#v", task.Container)
+	}
+}
+
+func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
+	t.Setenv("FRAMEWORK_NAME", "valkey-test")
+	t.Setenv("MESOS_DOMAIN", "cluster.internal")
+	t.Setenv("MESOS_CNI", "")
+	c := loadConfig()
+	if c.CNI != "" {
+		t.Fatalf("CNI = %q, want empty", c.CNI)
+	}
+	if c.Domain != "cluster.internal" {
+		t.Fatalf("Domain = %q, want cluster.internal", c.Domain)
+	}
+	if c.MasterHost != "master.valkey-test.cluster.internal" {
+		t.Fatalf("MasterHost = %q, want master.valkey-test.cluster.internal", c.MasterHost)
+	}
+}
+
 func TestRecordFrameworkIDPersistsLatestSubscribedID(t *testing.T) {
 	s := &Scheduler{}
 	if !s.recordFrameworkID("framework-1") {

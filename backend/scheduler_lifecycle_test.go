@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"sync"
 	"testing"
 
@@ -150,5 +152,42 @@ func TestAckStatusUpdateSendsAcknowledgeCall(t *testing.T) {
 	}
 	if got := ack.GetAcknowledge().GetUUID(); string(got) != string([]byte{1, 2, 3}) {
 		t.Fatalf("ack UUID = %v, want [1 2 3]", got)
+	}
+}
+
+func TestTerminalStatusUpdateRemovesTaskAndPersistsCleanup(t *testing.T) {
+	caller := &recordingCaller{}
+	stateFile := t.TempDir() + "/state.json"
+	s := testScheduler(caller)
+	s.cfg.StateFile = stateFile
+	s.tasks["slave-1"] = &Task{ID: "slave-1", Role: "slave-1", State: "TASK_RUNNING"}
+	state := lib.TASK_LOST
+
+	if err := s.handleEvent(context.Background(), &scheduler.Event{
+		Type: scheduler.Event_UPDATE,
+		Update: &scheduler.Event_Update{Status: lib.TaskStatus{
+			TaskID:  lib.TaskID{Value: "slave-1"},
+			AgentID: &lib.AgentID{Value: "agent-1"},
+			State:   &state,
+		}},
+	}); err != nil {
+		t.Fatalf("handle terminal UPDATE: %v", err)
+	}
+	if _, ok := s.tasks["slave-1"]; ok {
+		t.Fatal("terminal task must be removed from the in-memory task set")
+	}
+
+	persisted, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("read persisted state: %v", err)
+	}
+	var snapshot struct {
+		Tasks map[string]*Task `json:"tasks"`
+	}
+	if err := json.Unmarshal(persisted, &snapshot); err != nil {
+		t.Fatalf("decode persisted state: %v", err)
+	}
+	if len(snapshot.Tasks) != 0 {
+		t.Fatalf("persisted terminal tasks = %#v, want empty", snapshot.Tasks)
 	}
 }

@@ -425,6 +425,10 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 		if t := s.tasks[st.TaskID.Value]; t != nil {
 			t.State = st.State.String()
 			t.Updated = time.Now()
+
+			if isTerminalTaskState(st.State.String()) {
+				delete(s.tasks, st.TaskID.Value)
+			}
 		}
 		s.mu.Unlock()
 		s.save()
@@ -437,6 +441,16 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 	}
 	return nil
 }
+
+func isTerminalTaskState(state string) bool {
+	switch state {
+	case "TASK_FAILED", "TASK_LOST", "TASK_KILLED", "TASK_ERROR", "TASK_FINISHED":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Scheduler) start() {
 	s.mu.Lock()
 	if s.running {

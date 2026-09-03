@@ -39,8 +39,8 @@ export REDIS_DB=10
 # optional: export REDIS_PASSWORD='aus sicherer Laufzeitumgebung'
 export MESOS_CNI=weave
 export MESOS_DOMAIN=mesos
-# Standard ist: master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>
-# optional: export VALKEY_MASTER_HOST=master.valkey-framework.mesos
+# Standard ist: master.<MESOS_DOMAIN> (ohne FRAMEWORK_NAME)
+# optional: export VALKEY_MASTER_HOST=master.mesos
 export MESOS_ROLE='*'
 export VALKEY_MASTERS=1
 export VALKEY_SLAVES=2
@@ -54,7 +54,7 @@ export VALKEY_MEMORY_MB=256
 
 ## Wichtige Einschränkung
 
-Das Framework weist Tasks auf Mesos-Agenten zu. Wenn `MESOS_CNI` gesetzt ist, wird das konfigurierte Mesos-CNI-Netzwerk angefordert; bei leerem Wert wird keine CNI-Netzwerk-Information gesendet und Docker verwendet sein Standardnetzwerk. Für die Namensauflösung wird Mesos-DNS verwendet: Der Master wird als `master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>` veröffentlicht. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
+Das Framework weist Tasks auf Mesos-Agenten zu. Wenn `MESOS_CNI` gesetzt ist, wird das konfigurierte Mesos-CNI-Netzwerk angefordert; bei leerem Wert wird keine CNI-Netzwerk-Information gesendet und Docker verwendet sein Standardnetzwerk. Für die Namensauflösung wird Mesos-DNS verwendet: Der Master wird als `master.<MESOS_DOMAIN>` veröffentlicht; Container-Hostnamen werden als `<task>.<MESOS_DOMAIN>` gesetzt. Der Framework-Name ist nicht Bestandteil dieser Hostnamen. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
 
 `POST /api/scale` akzeptiert `{"masters": N}` und/oder `{"slaves": N}`. Beide Werte werden unabhängig reconciliert; beim Verkleinern beendet das Framework überschüssige laufende Tasks über die native Mesos-KILL-API, bevor der neue Zielwert persistiert wird. Mindestens ein Master und ein Slave bleiben erhalten.
 

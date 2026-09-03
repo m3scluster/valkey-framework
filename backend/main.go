@@ -134,7 +134,9 @@ func loadConfig() Config {
 		domainDefault = "weave.local"
 	}
 	domain := strings.Trim(envValue("MESOS_DOMAIN", domainDefault), ".")
-	masterHost := "master." + name
+	// Mesos-DNS uses the task hostname and domain; the framework name is not part
+	// of the DNS name (for example, master.weave.local).
+	masterHost := "master"
 	if domain != "" {
 		masterHost += "." + domain
 	}
@@ -259,7 +261,11 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	if isMasterRole(role) {
 		taskName = role
 	}
-	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: &lib.ContainerInfo{Type: &typ, Hostname: &taskName, Docker: &lib.ContainerInfo_DockerInfo{Image: image, Network: &dockerNetwork}, NetworkInfos: networkInfos}}
+	hostname := taskName
+	if s.cfg.Domain != "" {
+		hostname += "." + strings.Trim(s.cfg.Domain, ".")
+	}
+	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: &lib.ContainerInfo{Type: &typ, Hostname: &hostname, Docker: &lib.ContainerInfo_DockerInfo{Image: image, Network: &dockerNetwork}, NetworkInfos: networkInfos}}
 }
 func isMasterRole(role string) bool {
 	return role == "master" || strings.HasPrefix(role, "master-")

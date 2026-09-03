@@ -36,12 +36,12 @@ func TestSchedulerRegistrationTokensBackoffReconnects(t *testing.T) {
 }
 
 func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
-	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "weave", MasterHost: "valkey-framework.mesos"})
+	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "weave", Domain: "weave.local", MasterHost: "master.weave.local"})
 	task := s.buildTaskInfo("master", "task-1", lib.Offer{AgentID: lib.AgentID{Value: "agent-1"}})
 	if task.TaskID.Value != "task-1" || task.AgentID.Value != "agent-1" {
 		t.Fatalf("unexpected task identity: %#v", task)
 	}
-	if task.Name != "master" || task.Container.GetHostname() != "master" {
+	if task.Name != "master" || task.Container.GetHostname() != "master.weave.local" {
 		t.Fatalf("master task must use stable DNS name: %#v", task)
 	}
 	if len(task.Resources) != 2 || task.Container == nil || task.Container.Docker == nil || task.Container.Docker.Image != "valkey:test" {
@@ -53,10 +53,18 @@ func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
 }
 
 func TestBuildTaskInfoWithoutCNIUsesHostNetworking(t *testing.T) {
-	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "", MasterHost: "master.test.mesos"})
+	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "", Domain: "mesos", MasterHost: "master.mesos"})
 	task := s.buildTaskInfo("master", "task-1", lib.Offer{AgentID: lib.AgentID{Value: "agent-1"}})
 	if task.Container.Docker.GetNetwork() != lib.ContainerInfo_DockerInfo_HOST || len(task.Container.NetworkInfos) != 0 {
 		t.Fatalf("no-CNI task must use host networking without NetworkInfos: %#v", task.Container)
+	}
+}
+
+func TestBuildTaskInfoUsesConfiguredDomainForHostname(t *testing.T) {
+	s := NewScheduler(Config{Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, Domain: ".weave.local."})
+	task := s.buildTaskInfo("slave-1", "slave-1-123", lib.Offer{AgentID: lib.AgentID{Value: "agent-1"}})
+	if task.Container.GetHostname() != "slave-1-123.weave.local" {
+		t.Fatalf("task hostname = %q, want slave-1-123.weave.local", task.Container.GetHostname())
 	}
 }
 
@@ -79,8 +87,8 @@ func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
 	if c.Domain != "cluster.internal" {
 		t.Fatalf("Domain = %q, want cluster.internal", c.Domain)
 	}
-	if c.MasterHost != "master.valkey-test.cluster.internal" {
-		t.Fatalf("MasterHost = %q, want master.valkey-test.cluster.internal", c.MasterHost)
+	if c.MasterHost != "master.cluster.internal" {
+		t.Fatalf("MasterHost = %q, want master.cluster.internal", c.MasterHost)
 	}
 }
 

@@ -1,9 +1,7 @@
 .PHONY: run build test clean
 
-run: build
-	cd backend && exec valkey-mesos
-	cd frontend && exec npm run dev -- --host 0.0.0.0
-
+run:
+	cd frontend && exec npm run dev -- --host 0.0.0.0 &
 
 stop:
 	@curl -fsS -X POST "http://127.0.0.1:$${STOP_PORT:-8080}/api/stop" >/dev/null 2>&1 || true

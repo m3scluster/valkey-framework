@@ -35,7 +35,7 @@ func (c *recordingCaller) snapshot() []*scheduler.Call {
 
 func testScheduler(caller calls.Caller) *Scheduler {
 	return &Scheduler{
-		cfg:    Config{CPU: 0.2, Memory: 128, Image: "valkey:test", CNI: "weave", MasterHost: "valkey-framework.mesos", Port: 6379, Slaves: 1},
+		cfg:    Config{CPU: 0.2, Memory: 128, Image: "valkey:test", CNI: "weave", MasterHost: "valkey-master.weave.local", Port: 6379, Slaves: 1},
 		tasks:  map[string]*Task{},
 		state:  redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}),
 		caller: caller,

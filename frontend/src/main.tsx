@@ -30,6 +30,7 @@ function App() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [scaleNotification, setScaleNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +103,7 @@ function App() {
     if (!status) return;
     setBusy(true);
     setError('');
+    setScaleNotification(null);
     try {
       const newSlaves = status.slaves + delta;
       if (newSlaves < status.min_slaves) return;
@@ -109,9 +111,11 @@ function App() {
         method: 'POST',
         body: JSON.stringify({ slaves: newSlaves })
       });
+      setScaleNotification({type: 'success', message: `Scaling slaves request accepted. Current target: ${newSlaves}`});
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Scaling request failed');
+      setScaleNotification({ type: 'error', message: 'Scaling slaves request failed' });
     } finally {
       setBusy(false);
     }
@@ -123,11 +127,14 @@ function App() {
     if (newMasters < 1) return;
     setBusy(true);
     setError('');
+    setScaleNotification(null);
     try {
       await api<void>('/api/scale', { method: 'POST', body: JSON.stringify({ masters: newMasters }) });
+      setScaleNotification({type: 'success', message: `Scaling masters request accepted. Current target: ${newMasters}`});
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Master scaling request failed');
+      setScaleNotification({ type: 'error', message: 'Scaling masters request failed' });
     } finally {
       setBusy(false);
     }
@@ -144,6 +151,12 @@ function App() {
     <main>
       <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></header>
       {error && <div className="alert" role="alert">⚠ {error}</div>}
+      {scaleNotification && (
+        <div className={`scale-feedback ${scaleNotification.type}`} role={scaleNotification.type === 'error' ? 'alert' : 'status'} aria-live="polite">
+          {scaleNotification.type === 'success' ? '✓ ' : '✗ '}
+          {scaleNotification.message}
+        </div>
+      )}
       {status?.warnings?.map((warning, index) => <div className="alert scheduler-warning" role="alert" key={`${warning}-${index}`}>⚠ {warning}</div>)}
       <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {metricsTotal}</i></strong><span>active nodes</span></div></section>
       <div className="grid">

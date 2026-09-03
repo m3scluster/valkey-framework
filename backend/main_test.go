@@ -184,6 +184,59 @@ func TestScaleEndpointValidatesAndUpdatesTarget(t *testing.T) {
 	}
 }
 
+func TestScaleDownKillsSurplusSlaves(t *testing.T) {
+	caller := &recordingCaller{}
+	s := &Scheduler{
+		cfg:         Config{Name: "test", Slaves: 3},
+		frameworkID: "framework-test",
+		tasks: map[string]*Task{
+			"slave-1-task": {ID: "slave-1-task", Role: "slave-1", State: "TASK_RUNNING", Agent: "agent-1"},
+			"slave-2-task": {ID: "slave-2-task", Role: "slave-2", State: "TASK_RUNNING", Agent: "agent-2"},
+			"slave-3-task": {ID: "slave-3-task", Role: "slave-3", State: "TASK_RUNNING", Agent: "agent-3"},
+		},
+		caller: caller,
+	}
+
+	response := httptest.NewRecorder()
+	s.handler().ServeHTTP(response, httptest.NewRequest("POST", "/api/scale", strings.NewReader(`{"slaves":1}`)))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("scale down status = %d, want %d", response.Code, http.StatusAccepted)
+	}
+	callsSeen := caller.snapshot()
+	if len(callsSeen) != 2 {
+		t.Fatalf("Mesos calls = %d, want two KILL calls", len(callsSeen))
+	}
+	for i, want := range []string{"slave-3-task", "slave-2-task"} {
+		if callsSeen[i].GetType() != scheduler.Call_KILL {
+			t.Fatalf("call %d type = %s, want KILL", i, callsSeen[i].GetType())
+		}
+		if got := callsSeen[i].GetKill().GetTaskID().Value; got != want {
+			t.Fatalf("call %d task ID = %q, want %q", i, got, want)
+		}
+		if got := callsSeen[i].GetKill().GetAgentID().GetValue(); got != "agent-"+string(rune('0'+3-i)) {
+			t.Fatalf("call %d agent ID = %q", i, got)
+		}
+		if got := callsSeen[i].GetFrameworkID().GetValue(); got != "framework-test" {
+			t.Fatalf("call %d framework ID = %q", i, got)
+		}
+	}
+	if len(s.tasks) != 1 || s.tasks["slave-1-task"] == nil || s.cfg.Slaves != 1 {
+		t.Fatalf("state after scale down = tasks=%v slaves=%d", s.tasks, s.cfg.Slaves)
+	}
+}
+
+func TestScaleUpDoesNotKillTasks(t *testing.T) {
+	caller := &recordingCaller{}
+	s := &Scheduler{cfg: Config{Name: "test", Slaves: 1}, tasks: map[string]*Task{
+		"slave-1-task": {ID: "slave-1-task", Role: "slave-1", State: "TASK_RUNNING", Agent: "agent-1"},
+	}, caller: caller}
+	response := httptest.NewRecorder()
+	s.handler().ServeHTTP(response, httptest.NewRequest("POST", "/api/scale", strings.NewReader(`{"slaves":2}`)))
+	if response.Code != http.StatusAccepted || len(caller.snapshot()) != 0 {
+		t.Fatalf("scale up status=%d calls=%d, want accepted and no Mesos calls", response.Code, len(caller.snapshot()))
+	}
+}
+
 func TestNextRole(t *testing.T) {
 	// Test initial state - should return "master"
 	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "weave", MasterHost: "valkey-framework.mesos", Slaves: 2})

@@ -8,6 +8,7 @@ import (
 
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -491,6 +492,49 @@ func (s *Scheduler) stop() {
 	s.save()
 }
 
+// scaleSlaves reconciles running slave tasks before committing a smaller
+// target. Mesos does not remove already-launched tasks when the target changes.
+func (s *Scheduler) scaleSlaves(ctx context.Context, target int) error {
+	s.mu.Lock()
+	if target < minSlaves {
+		s.mu.Unlock()
+		return fmt.Errorf("at least %d slave required", minSlaves)
+	}
+	frameworkID := s.frameworkID
+	type surplusTask struct {
+		id, agent string
+		index     int
+	}
+	surplus := make([]surplusTask, 0)
+	for _, task := range s.tasks {
+		if !strings.HasPrefix(task.Role, "slave-") || isTerminalTaskState(task.State) {
+			continue
+		}
+		index, err := strconv.Atoi(strings.TrimPrefix(task.Role, "slave-"))
+		if err == nil && index > target {
+			surplus = append(surplus, surplusTask{id: task.ID, agent: task.Agent, index: index})
+		}
+	}
+	s.mu.Unlock()
+
+	sort.Slice(surplus, func(i, j int) bool { return surplus[i].index > surplus[j].index })
+	for _, task := range surplus {
+		call := calls.Kill(task.id, task.agent).With(calls.Framework(frameworkID))
+		if err := calls.CallNoData(ctx, s.caller, call); err != nil {
+			return fmt.Errorf("kill surplus slave %s: %w", task.id, err)
+		}
+	}
+
+	s.mu.Lock()
+	s.cfg.Slaves = target
+	for _, task := range surplus {
+		delete(s.tasks, task.id)
+	}
+	s.mu.Unlock()
+	s.save()
+	return nil
+}
+
 type eventHandler struct{ s *Scheduler }
 
 func (h eventHandler) HandleEvent(c context.Context, e *scheduler.Event) error {
@@ -539,14 +583,14 @@ func (s *Scheduler) handler() http.Handler {
 			http.Error(w, "invalid JSON request", http.StatusBadRequest)
 			return
 		}
-		if request.Slaves < minSlaves {
-			http.Error(w, fmt.Sprintf("at least %d slave required", minSlaves), http.StatusBadRequest)
+		if err := s.scaleSlaves(r.Context(), request.Slaves); err != nil {
+			status := http.StatusInternalServerError
+			if request.Slaves < minSlaves {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
-		s.mu.Lock()
-		s.cfg.Slaves = request.Slaves
-		s.mu.Unlock()
-		s.save()
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{"masters": 1, "slaves": request.Slaves, "min_slaves": minSlaves})
 	})

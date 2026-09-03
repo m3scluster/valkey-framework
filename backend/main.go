@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -26,22 +27,33 @@ import (
 )
 
 type Config struct {
-	Master, Image, Role, Name, User, RedisServer, CNI, Domain, MasterHost, Listen string
-	Password, RedisPassword                                                       string
-	RedisDB, Slaves                                                               int
-	CPU, Memory                                                                   float64
-	Port                                                                          int
-	DryRun, InsecureTLS                                                           bool
+	Master, Image, Role, Name, User, RedisServer, ValkeyMetricsAddr, CNI, Domain, MasterHost, Listen string
+	Password, RedisPassword                                                                          string
+	RedisDB, Masters, Slaves                                                                         int
+	CPU, Memory                                                                                      float64
+	Port                                                                                             int
+	DryRun, InsecureTLS                                                                              bool
 }
 
 // This model supports one master and requires at least one replica. Keep the
 // invariant in the backend so callers cannot weaken it by bypassing the UI.
 const minSlaves = 1
+const minMasters = 1
 
 type Task struct {
 	ID, Role, State, Agent, Host string
 	Port                         int
 	Updated                      time.Time
+}
+
+type valkeyMetricsReader interface {
+	Info(context.Context, ...string) (string, error)
+}
+
+type redisInfoReader struct{ client *redis.Client }
+
+func (r redisInfoReader) Info(ctx context.Context, sections ...string) (string, error) {
+	return r.client.Info(ctx, sections...).Result()
 }
 
 type Scheduler struct {
@@ -56,6 +68,7 @@ type Scheduler struct {
 	runCancel        context.CancelFunc
 	running          bool
 	resourceShortage bool
+	metricsReader    valkeyMetricsReader
 }
 
 const schedulerReconnectBackoff = time.Second
@@ -129,7 +142,13 @@ func loadConfig() Config {
 	if slaves < minSlaves {
 		slaves = minSlaves
 	}
-	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
+	masters := atoi("VALKEY_MASTERS", 1)
+	if masters < minMasters {
+		masters = minMasters
+	}
+	port := atoi("VALKEY_PORT", 6379)
+	metricsAddr := env("VALKEY_METRICS_ADDR", net.JoinHostPort(masterHost, strconv.Itoa(port)))
+	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(env(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
@@ -157,6 +176,7 @@ func NewScheduler(c Config) *Scheduler {
 	ft := float64(3600)
 	role := c.Role
 	s := &Scheduler{cfg: c, tasks: map[string]*Task{}, state: redis.NewClient(&redis.Options{Addr: c.RedisServer, Password: c.RedisPassword, DB: c.RedisDB}), caller: httpsched.NewCaller(cli), framework: &lib.FrameworkInfo{User: c.User, Name: c.Name, Role: &role, FailoverTimeout: &ft}}
+	s.metricsReader = redisInfoReader{client: redis.NewClient(&redis.Options{Addr: c.ValkeyMetricsAddr})}
 	s.load()
 	return s
 }
@@ -220,7 +240,7 @@ func scalar(name string, v float64) lib.Resource {
 }
 func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	cmd := fmt.Sprintf("valkey-server --port %d", s.cfg.Port)
-	if role != "master" {
+	if !isMasterRole(role) {
 		cmd += fmt.Sprintf(" --replicaof %s %d", s.cfg.MasterHost, s.cfg.Port)
 	}
 	shell := true
@@ -236,11 +256,34 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	}
 
 	taskName := id
-	if role == "master" {
-		taskName = "master"
+	if isMasterRole(role) {
+		taskName = role
 	}
 	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: &lib.ContainerInfo{Type: &typ, Hostname: &taskName, Docker: &lib.ContainerInfo_DockerInfo{Image: image, Network: &dockerNetwork}, NetworkInfos: networkInfos}}
 }
+func isMasterRole(role string) bool {
+	return role == "master" || strings.HasPrefix(role, "master-")
+}
+func (s *Scheduler) desiredMasterCount() int {
+	if s.cfg.Masters < minMasters {
+		return minMasters
+	}
+	return s.cfg.Masters
+}
+func masterRole(index, total int) string {
+	if total == 1 {
+		return "master"
+	}
+	return fmt.Sprintf("master-%d", index)
+}
+
+func masterSlotRole(index, total int) string {
+	if total == 1 && index == 1 {
+		return "master"
+	}
+	return fmt.Sprintf("master-%d", index)
+}
+
 func (s *Scheduler) nextRole() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -248,15 +291,15 @@ func (s *Scheduler) nextRole() string {
 	// for TASK_RUNNING here would launch one new master for every offer while
 	// the first master is still staging, creating a large history of duplicate
 	// tasks and potentially leaving replicas behind after the master fails.
-	masterRunning := false
+	masterRunning := 0
 	masterPending := false
 	for _, t := range s.tasks {
-		if t.Role != "master" {
+		if !isMasterRole(t.Role) {
 			continue
 		}
 		switch t.State {
 		case "TASK_RUNNING":
-			masterRunning = true
+			masterRunning++
 		case "TASK_STAGING", "TASK_STARTING", "TASK_UNKNOWN":
 			masterPending = true
 		}
@@ -264,10 +307,27 @@ func (s *Scheduler) nextRole() string {
 
 	// If no master exists, return "master" to create one. If one is already
 	// pending, decline this offer and wait for its status update instead.
-	if !masterRunning && !masterPending {
-		return "master"
+	masters := s.desiredMasterCount()
+	if masterRunning == 0 && !masterPending {
+		return masterRole(1, masters)
 	}
-	if !masterRunning {
+	if masterRunning < masters || masterPending {
+		for i := 1; i <= masters; i++ {
+			role := masterSlotRole(i, masters)
+			found := false
+			for _, t := range s.tasks {
+				// "master" is the legacy name for slot 1. Accept it when
+				// scaling an existing one-master deployment to multiple masters.
+				isSlot := t.Role == role || (i == 1 && t.Role == "master")
+				if isSlot && !isTerminalTaskState(t.State) {
+					found = true
+					break
+				}
+			}
+			if !found && !masterPending {
+				return role
+			}
+		}
 		return ""
 	}
 
@@ -328,13 +388,13 @@ func (s *Scheduler) warningsLocked() []string {
 		warnings = append(warnings, fmt.Sprintf("Mesos offers do not provide enough resources (need %.2f CPU and %.0f MB memory)", s.cfg.CPU, s.cfg.Memory))
 	}
 	for i := 0; i <= s.cfg.Slaves; i++ {
-		role := "master"
+		role := masterRole(1, s.desiredMasterCount())
 		if i > 0 {
 			role = fmt.Sprintf("slave-%d", i)
 		}
 		failed, live := false, false
 		for _, task := range s.tasks {
-			if task.Role != role {
+			if task.Role != role && !(i == 0 && isMasterRole(task.Role)) {
 				continue
 			}
 			switch task.State {
@@ -535,11 +595,94 @@ func (s *Scheduler) scaleSlaves(ctx context.Context, target int) error {
 	return nil
 }
 
+func masterIndex(role string) int {
+	if role == "master" {
+		return 1
+	}
+	if !strings.HasPrefix(role, "master-") {
+		return 0
+	}
+	index, err := strconv.Atoi(strings.TrimPrefix(role, "master-"))
+	if err != nil {
+		return 0
+	}
+	return index
+}
+
+func (s *Scheduler) scaleMasters(ctx context.Context, target int) error {
+	s.mu.Lock()
+	if target < minMasters {
+		s.mu.Unlock()
+		return fmt.Errorf("at least %d master required", minMasters)
+	}
+	frameworkID := s.frameworkID
+	type surplusTask struct {
+		id, agent string
+		index     int
+	}
+	surplus := make([]surplusTask, 0)
+	for _, task := range s.tasks {
+		index := masterIndex(task.Role)
+		if index > target && index > 0 && !isTerminalTaskState(task.State) {
+			surplus = append(surplus, surplusTask{id: task.ID, agent: task.Agent, index: index})
+		}
+	}
+	s.mu.Unlock()
+
+	sort.Slice(surplus, func(i, j int) bool { return surplus[i].index > surplus[j].index })
+	for _, task := range surplus {
+		call := calls.Kill(task.id, task.agent).With(calls.Framework(frameworkID))
+		if err := calls.CallNoData(ctx, s.caller, call); err != nil {
+			return fmt.Errorf("kill surplus master %s: %w", task.id, err)
+		}
+	}
+
+	s.mu.Lock()
+	s.cfg.Masters = target
+	for _, task := range surplus {
+		delete(s.tasks, task.id)
+	}
+	s.mu.Unlock()
+	s.save()
+	return nil
+}
+
 type eventHandler struct{ s *Scheduler }
 
 func (h eventHandler) HandleEvent(c context.Context, e *scheduler.Event) error {
 	logrus.WithField("event_type", e.GetType().String()).WithField("event_error", e.GetError().GetMessage()).Info("mesos scheduler event received")
 	return h.s.handleEvent(c, e)
+}
+
+var valkeyInfoSections = []string{"memory", "clients", "stats", "replication", "cpu", "commandstats", "latencystats"}
+
+func parseValkeyInfo(raw string) map[string]map[string]any {
+	sections := make(map[string]map[string]any, len(valkeyInfoSections))
+	section := ""
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			section = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "#")))
+			if sections[section] == nil {
+				sections[section] = make(map[string]any)
+			}
+			continue
+		}
+		separator := strings.IndexByte(line, ':')
+		if section == "" || separator <= 0 {
+			continue
+		}
+		key, value := strings.TrimSpace(line[:separator]), strings.TrimSpace(line[separator+1:])
+		if number, err := strconv.ParseFloat(value, 64); err == nil {
+			sections[section][key] = number
+		} else {
+			sections[section][key] = value
+		}
+	}
+	return sections
 }
 
 func (s *Scheduler) handler() http.Handler {
@@ -548,24 +691,39 @@ func (s *Scheduler) handler() http.Handler {
 	m.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "masters": 1, "slaves": s.cfg.Slaves, "min_slaves": minSlaves, "warnings": s.warningsLocked(), "tasks": s.tasks})
+		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "masters": s.desiredMasterCount(), "slaves": s.cfg.Slaves, "min_masters": minMasters, "min_slaves": minSlaves, "warnings": s.warningsLocked(), "tasks": s.tasks})
 	})
 	m.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		counts := map[string]int{}
 		for _, task := range s.tasks {
 			counts[task.State]++
 		}
+		frameworkID, desired, reader := s.frameworkID, s.desired, s.metricsReader
+		s.mu.Unlock()
 		live := counts["TASK_RUNNING"] + counts["TASK_STAGING"] + counts["TASK_STARTING"] + counts["TASK_UNKNOWN"]
 		metrics := map[string]any{
-			"framework_id": s.frameworkID,
-			"desired":      s.desired,
+			"framework_id": frameworkID,
+			"desired":      desired,
 			"total":        live,
 			"running":      counts["TASK_RUNNING"],
 			"staging":      counts["TASK_STAGING"],
 			"failed":       counts["TASK_FAILED"] + counts["TASK_LOST"],
 		}
+		valkey := map[string]any{"available": false, "error": "Valkey metrics reader is not configured", "sections": map[string]map[string]any{}}
+		if reader != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			raw, err := reader.Info(ctx, valkeyInfoSections...)
+			cancel()
+			if err != nil {
+				valkey["error"] = err.Error()
+			} else {
+				valkey["available"] = true
+				valkey["error"] = ""
+				valkey["sections"] = parseValkeyInfo(raw)
+			}
+		}
+		metrics["valkey"] = valkey
 		_ = json.NewEncoder(w).Encode(metrics)
 	})
 	m.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) { s.start(); w.WriteHeader(202) })
@@ -576,23 +734,47 @@ func (s *Scheduler) handler() http.Handler {
 			return
 		}
 		var request struct {
-			Slaves int `json:"slaves"`
+			Masters *int `json:"masters"`
+			Slaves  *int `json:"slaves"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&request); err != nil {
 			http.Error(w, "invalid JSON request", http.StatusBadRequest)
 			return
 		}
-		if err := s.scaleSlaves(r.Context(), request.Slaves); err != nil {
-			status := http.StatusInternalServerError
-			if request.Slaves < minSlaves {
-				status = http.StatusBadRequest
-			}
-			http.Error(w, err.Error(), status)
+		if request.Masters == nil && request.Slaves == nil {
+			http.Error(w, "masters or slaves is required", http.StatusBadRequest)
 			return
 		}
+		// Validate the complete request before reconciling either dimension so
+		// a malformed combined update cannot partially change the topology.
+		if request.Masters != nil && *request.Masters < minMasters {
+			http.Error(w, fmt.Sprintf("at least %d master required", minMasters), http.StatusBadRequest)
+			return
+		}
+		if request.Slaves != nil && *request.Slaves < minSlaves {
+			http.Error(w, fmt.Sprintf("at least %d slave required", minSlaves), http.StatusBadRequest)
+			return
+		}
+		if request.Masters != nil {
+			if err := s.scaleMasters(r.Context(), *request.Masters); err != nil {
+				status := http.StatusInternalServerError
+				http.Error(w, err.Error(), status)
+				return
+			}
+		}
+		if request.Slaves != nil {
+			if err := s.scaleSlaves(r.Context(), *request.Slaves); err != nil {
+				status := http.StatusInternalServerError
+				http.Error(w, err.Error(), status)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]any{"masters": 1, "slaves": request.Slaves, "min_slaves": minSlaves})
+		s.mu.Lock()
+		masters, slaves := s.desiredMasterCount(), s.cfg.Slaves
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"masters": masters, "slaves": slaves, "min_masters": minMasters, "min_slaves": minSlaves})
 	})
 	return m
 }

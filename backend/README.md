@@ -9,9 +9,9 @@ Eigenständiges Apache-Mesos-v1-Framework, das einen Valkey-Master und konfiguri
 - Übernahme und Verwendung von `Mesos-Stream-Id`
 - `OFFERS`, `SUBSCRIBED` und `UPDATE`-Events
 - Docker-`LAUNCH` mit expliziten CPU- und RAM-Ressourcen
-- standardmäßig ein Master plus zwei Slaves
+- standardmäßig ein Master plus zwei Slaves; Master und Slaves sind getrennt skalierbar
 - Mesos-CNI-Netzwerk ohne externe Portfreigaben; standardmäßig `MESOS_CNI=weave`
-- `/healthz`, `/api/status`, `/api/start`, `/api/stop`
+- `/healthz`, `/api/status`, `/api/start`, `/api/stop`, `/api/scale`
 - `MESOS_DRY_RUN=true` für lokale Prüfung ohne Mesos
 - Redis-State mit konfigurierbarem Server und DB; standardmäßig `redis.weave.local:6379`, DB `10`
 - Logrus-Meldungen mit `LOG_LEVEL=debug|info|error`, Standard: `info`
@@ -42,6 +42,7 @@ export MESOS_DOMAIN=mesos
 # Standard ist: master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>
 # optional: export VALKEY_MASTER_HOST=master.valkey-framework.mesos
 export MESOS_ROLE='*'
+export VALKEY_MASTERS=1
 export VALKEY_SLAVES=2
 export VALKEY_IMAGE=valkey/valkey:8-alpine
 export VALKEY_CPU=0.2
@@ -55,7 +56,9 @@ export VALKEY_MEMORY_MB=256
 
 Das Framework weist Tasks auf Mesos-Agenten zu. Wenn `MESOS_CNI` gesetzt ist, wird das konfigurierte Mesos-CNI-Netzwerk angefordert; bei leerem Wert wird keine CNI-Netzwerk-Information gesendet und Docker verwendet sein Standardnetzwerk. Für die Namensauflösung wird Mesos-DNS verwendet: Der Master wird als `master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>` veröffentlicht. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
 
-`/api/stop` beendet aktuell die gewünschte Bereitstellung und verhindert weitere Starts. Das tatsächliche Killen bereits laufender Tasks kann über die native Mesos-Kill-API ergänzt werden, sobald das gewünschte Betriebsmodell (persistente Daten/Volumes und Failover) festgelegt ist.
+`POST /api/scale` akzeptiert `{"masters": N}` und/oder `{"slaves": N}`. Beide Werte werden unabhängig reconciliert; beim Verkleinern beendet das Framework überschüssige laufende Tasks über die native Mesos-KILL-API, bevor der neue Zielwert persistiert wird. Mindestens ein Master und ein Slave bleiben erhalten.
+
+`/api/stop` beendet aktuell die gewünschte Bereitstellung und verhindert weitere Starts. Bereits laufende Tasks werden dabei nicht automatisch gekillt.
 
 ## Referenz
 

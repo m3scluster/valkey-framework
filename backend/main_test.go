@@ -64,10 +64,14 @@ func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
 	t.Setenv("FRAMEWORK_NAME", "valkey-test")
 	t.Setenv("MESOS_DOMAIN", "cluster.internal")
 	t.Setenv("MESOS_CNI", "")
+	t.Setenv("VALKEY_MASTERS", "0")
 	t.Setenv("VALKEY_SLAVES", "0")
 	c := loadConfig()
 	if c.CNI != "" {
 		t.Fatalf("CNI = %q, want empty", c.CNI)
+	}
+	if c.Masters != minMasters {
+		t.Fatalf("Masters = %d, want minimum %d", c.Masters, minMasters)
 	}
 	if c.Slaves != minSlaves {
 		t.Fatalf("Slaves = %d, want minimum %d", c.Slaves, minSlaves)
@@ -131,6 +135,86 @@ func TestRestoreStateRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+type fakeValkeyMetricsReader struct {
+	info       string
+	err        error
+	sections   []string
+	duringRead func()
+}
+
+func (f *fakeValkeyMetricsReader) Info(_ context.Context, sections ...string) (string, error) {
+	f.sections = append([]string(nil), sections...)
+	if f.duringRead != nil {
+		f.duringRead()
+	}
+	return f.info, f.err
+}
+
+func TestMetricsEndpointReadsAndParsesAllValkeyInfoSectionsWithoutSchedulerLock(t *testing.T) {
+	reader := &fakeValkeyMetricsReader{info: `# Memory
+used_memory:1048576
+used_memory_human:1.00M
+malformed
+# Clients
+connected_clients:12
+# Stats
+instantaneous_ops_per_sec:42
+# Replication
+role:master
+connected_slaves:2
+# CPU
+used_cpu_sys:3.25
+# Commandstats
+cmdstat_get:calls=8,usec=16,usec_per_call=2.00
+# Latencystats
+latency_percentiles_usec_get:p50=1.003,p99=4.015
+`}
+	s := &Scheduler{frameworkID: "framework-1", desired: true, tasks: map[string]*Task{
+		"running": {State: "TASK_RUNNING"},
+	}, metricsReader: reader}
+	reader.duringRead = func() {
+		if !s.mu.TryLock() {
+			t.Fatal("Scheduler.mu was held during Valkey INFO call")
+		}
+		s.mu.Unlock()
+	}
+
+	recording := httptest.NewRecorder()
+	s.handler().ServeHTTP(recording, httptest.NewRequest("GET", "/api/metrics", nil))
+	if recording.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200", recording.Code)
+	}
+	wantSections := []string{"memory", "clients", "stats", "replication", "cpu", "commandstats", "latencystats"}
+	if !reflect.DeepEqual(reader.sections, wantSections) {
+		t.Fatalf("INFO sections = %#v, want %#v", reader.sections, wantSections)
+	}
+	var got struct {
+		Total  int `json:"total"`
+		Valkey struct {
+			Available bool                      `json:"available"`
+			Error     string                    `json:"error"`
+			Sections  map[string]map[string]any `json:"sections"`
+		} `json:"valkey"`
+	}
+	if err := json.Unmarshal(recording.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	if !got.Valkey.Available || got.Valkey.Error != "" || got.Total != 1 {
+		t.Fatalf("metrics availability/backward fields = %#v", got)
+	}
+	if got.Valkey.Sections["memory"]["used_memory"] != float64(1048576) || got.Valkey.Sections["clients"]["connected_clients"] != float64(12) || got.Valkey.Sections["cpu"]["used_cpu_sys"] != 3.25 {
+		t.Fatalf("numeric INFO values not decoded as JSON numbers: %#v", got.Valkey.Sections)
+	}
+	if got.Valkey.Sections["memory"]["used_memory_human"] != "1.00M" || got.Valkey.Sections["commandstats"]["cmdstat_get"] != "calls=8,usec=16,usec_per_call=2.00" || got.Valkey.Sections["latencystats"]["latency_percentiles_usec_get"] != "p50=1.003,p99=4.015" {
+		t.Fatalf("text/compound INFO values not preserved: %#v", got.Valkey.Sections)
+	}
+	for _, section := range wantSections {
+		if got.Valkey.Sections[section] == nil {
+			t.Fatalf("missing section %q in %#v", section, got.Valkey.Sections)
+		}
+	}
+}
+
 func TestMetricsEndpointCountsTaskStates(t *testing.T) {
 	s := &Scheduler{frameworkID: "framework-1", desired: true, tasks: map[string]*Task{
 		"running": {State: "TASK_RUNNING"},
@@ -175,11 +259,12 @@ func TestScaleEndpointValidatesAndUpdatesTarget(t *testing.T) {
 	status := httptest.NewRecorder()
 	handler.ServeHTTP(status, httptest.NewRequest("GET", "/api/status", nil))
 	var got struct {
-		Masters   int `json:"masters"`
-		Slaves    int `json:"slaves"`
-		MinSlaves int `json:"min_slaves"`
+		Masters    int `json:"masters"`
+		Slaves     int `json:"slaves"`
+		MinMasters int `json:"min_masters"`
+		MinSlaves  int `json:"min_slaves"`
 	}
-	if err := json.Unmarshal(status.Body.Bytes(), &got); err != nil || got.Masters != 1 || got.Slaves != 4 || got.MinSlaves != minSlaves {
+	if err := json.Unmarshal(status.Body.Bytes(), &got); err != nil || got.Masters != 1 || got.Slaves != 4 || got.MinMasters != minMasters || got.MinSlaves != minSlaves {
 		t.Fatalf("status scaling metadata = %#v, err=%v", got, err)
 	}
 }
@@ -234,6 +319,34 @@ func TestScaleUpDoesNotKillTasks(t *testing.T) {
 	s.handler().ServeHTTP(response, httptest.NewRequest("POST", "/api/scale", strings.NewReader(`{"slaves":2}`)))
 	if response.Code != http.StatusAccepted || len(caller.snapshot()) != 0 {
 		t.Fatalf("scale up status=%d calls=%d, want accepted and no Mesos calls", response.Code, len(caller.snapshot()))
+	}
+}
+
+func TestScaleDownKillsSurplusMasters(t *testing.T) {
+	caller := &recordingCaller{}
+	s := &Scheduler{cfg: Config{Name: "test", Masters: 3}, frameworkID: "framework-test", tasks: map[string]*Task{
+		"m1": {ID: "m1", Role: "master-1", State: "TASK_RUNNING", Agent: "agent-1"},
+		"m2": {ID: "m2", Role: "master-2", State: "TASK_RUNNING", Agent: "agent-2"},
+		"m3": {ID: "m3", Role: "master-3", State: "TASK_RUNNING", Agent: "agent-3"},
+	}, caller: caller}
+	if err := s.scaleMasters(context.Background(), 1); err != nil {
+		t.Fatalf("scale masters: %v", err)
+	}
+	callsSeen := caller.snapshot()
+	if len(callsSeen) != 2 || callsSeen[0].GetKill().GetTaskID().Value != "m3" || callsSeen[1].GetKill().GetTaskID().Value != "m2" {
+		t.Fatalf("kill calls = %#v, want m3 then m2", callsSeen)
+	}
+	if s.cfg.Masters != 1 || len(s.tasks) != 1 || s.tasks["m1"] == nil {
+		t.Fatalf("scaled master state = masters=%d tasks=%v", s.cfg.Masters, s.tasks)
+	}
+}
+
+func TestScaleUpFromLegacyMasterSchedulesSecondMaster(t *testing.T) {
+	s := &Scheduler{cfg: Config{Masters: 2, Slaves: 1}, tasks: map[string]*Task{
+		"legacy": {ID: "legacy", Role: "master", State: "TASK_RUNNING"},
+	}}
+	if got := s.nextRole(); got != "master-2" {
+		t.Fatalf("next role after scaling legacy master = %q, want master-2", got)
 	}
 }
 

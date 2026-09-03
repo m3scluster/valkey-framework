@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import './style.css';
 
 type Task = { ID: string; Role: string; State: string; Host?: string; Port?: number; Updated?: string };
-type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
-type Metrics = { framework_id: string; desired: boolean; total: number; running: number; staging: number; failed: number };
+type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_masters: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
+type Metrics = { framework_id: string; desired: boolean; total: number; running: number; staging: number; failed: number; valkey?: { available: boolean; error: string; sections: Record<string, Record<string, string | number>> } };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -111,6 +111,24 @@ function App() {
     }
   }
 
+  async function adjustMasters(delta: number) {
+    if (!status) return;
+    const newMasters = status.masters + delta;
+    if (newMasters < 1) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api<void>('/api/scale', { method: 'POST', body: JSON.stringify({ masters: newMasters }) });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Master scaling request failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const metricSections = metrics?.valkey?.sections ?? {};
+
   return <div className="shell">
     <aside>
       <div className="brand"><ValkeyClusterMark /><div><b>VALKEY</b><small>CONTROL PLANE</small></div></div>
@@ -132,8 +150,9 @@ function App() {
         <article className="card metric"><span className="label">STARTING</span><strong>{status ? metricsStaging : '—'}</strong><span className="muted">waiting for Mesos</span></article>
         <article className="card metric"><span className="label">FAILED / LOST</span><strong className={metricsFailed ? 'warning' : ''}>{status ? metricsFailed : '—'}</strong><span className="muted">requires reconciliation</span></article>
       </div>
+      <section className="metrics-section"><div className="nodes-head"><div><span className="label">VALKEY SDK</span><h3>Live server metrics</h3></div><span className="refresh">INFO via Valkey client</span></div>{metrics?.valkey?.available ? <div className="metric-sections">{Object.entries(metricSections).map(([section, values]) => <article className="card info-card" key={section}><span className="label">{section.toUpperCase()}</span>{Object.entries(values).slice(0, 6).map(([key, value]) => <div className="info-row" key={key}><span title={key}>{key}</span><strong>{typeof value === 'number' ? value.toLocaleString('en-US') : value}</strong>{typeof value === 'number' && <span className="metric-bar"><i style={{ width: `${Math.min(100, Math.max(4, Math.abs(value) % 100))}%` }} /></span>}</div>)}</article>)}</div> : <div className="card metrics-unavailable">Valkey metrics unavailable{metrics?.valkey?.error ? `: ${metrics.valkey.error}` : '.'}</div>}</section>
       <section className="card control"><div><span className="label">DEPLOYMENT</span><h3>Scheduler-managed cluster</h3><p>The scheduler starts and reconciles the Valkey deployment. The dashboard is observing it or requesting a stop.</p></div><div className="scale"><button className="primary" onClick={() => void startCluster()} disabled={busy || !clusterKnown || desired}>{busy ? 'Starting…' : 'Start cluster'}</button><button className="danger" onClick={() => void stopCluster()} disabled={busy || !clusterKnown || !desired}>{busy ? 'Stopping…' : 'Stop cluster'}</button></div></section>
-      <section className="card control"><div><span className="label">SCALING</span><h3>Cluster size</h3><p>This Valkey model uses one master and requires at least {status?.min_slaves ?? '—'} slave.</p></div><div className="scale"><span className="slave-count" aria-label="Master count">Masters: {status?.masters ?? '—'}</span><button className="secondary" aria-label="Decrease slave count" onClick={() => void adjustSlaves(-1)} disabled={busy || !clusterKnown || !desired || !status || status.slaves <= status.min_slaves}>− Slave</button><span className="slave-count" aria-label="Slave count">Slaves: {status?.slaves ?? '—'}</span><button className="secondary" aria-label="Increase slave count" onClick={() => void adjustSlaves(1)} disabled={busy || !clusterKnown || !desired}>+ Slave</button></div></section>
+      <section className="card control"><div><span className="label">SCALING</span><h3>Cluster size</h3><p>This Valkey model requires at least one master and {status?.min_slaves ?? '—'} slave.</p></div><div className="scale"><span className="slave-count" aria-label="Master count">Masters: {status?.masters ?? '—'}</span><button className="secondary" aria-label="Decrease master count" onClick={() => void adjustMasters(-1)} disabled={busy || !clusterKnown || !desired || !status || status.masters <= 1}>− Master</button><button className="secondary" aria-label="Increase master count" onClick={() => void adjustMasters(1)} disabled={busy || !clusterKnown || !desired}>+ Master</button><span className="slave-count" aria-label="Slave count">Slaves: {status?.slaves ?? '—'}</span><button className="secondary" aria-label="Decrease slave count" onClick={() => void adjustSlaves(-1)} disabled={busy || !clusterKnown || !desired || !status || status.slaves <= status.min_slaves}>− Slave</button><button className="secondary" aria-label="Increase slave count" onClick={() => void adjustSlaves(1)} disabled={busy || !clusterKnown || !desired}>+ Slave</button></div></section>
       <section className="nodes-head"><div><span className="label">INSTANCES</span><h3>Valkey Nodes</h3></div><span className="refresh">Refreshes every 5 seconds</span></section>
       <div className="node-grid">{tasks.length ? tasks.map(task => <article className="node card" key={task.ID}><div className="node-top"><ValkeyClusterMark /><span className="badge running">RUNNING</span></div><h3>{task.Role}</h3><p>{task.Host || 'Mesos Agent'}</p><div className="node-data"><span>PORT <b>{task.Port ?? '—'}</b></span><span>UPDATED <b>{task.Updated ? new Date(task.Updated).toLocaleTimeString('en-US') : '—'}</b></span></div></article>) : <div className="empty card">No running nodes. The scheduler is waiting for Mesos Offers.</div>}</div>
     </main>

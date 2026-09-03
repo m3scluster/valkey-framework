@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+
 	"net/http"
 	"os"
 	"strconv"
@@ -12,12 +13,13 @@ import (
 	"sync"
 	"time"
 
-	lib "github.com/mesos/mesos-go/api/v1/lib"
-	"github.com/mesos/mesos-go/api/v1/lib/extras/scheduler/controller"
-	httpcli "github.com/mesos/mesos-go/api/v1/lib/httpcli"
-	httpsched "github.com/mesos/mesos-go/api/v1/lib/httpcli/httpsched"
-	"github.com/mesos/mesos-go/api/v1/lib/scheduler"
-	"github.com/mesos/mesos-go/api/v1/lib/scheduler/calls"
+	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/encoding/codecs"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/extras/scheduler/controller"
+	httpcli "github.com/m3scluster/clusterd-go/api/v1/lib/httpcli"
+	httpsched "github.com/m3scluster/clusterd-go/api/v1/lib/httpcli/httpsched"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler/calls"
 	"github.com/redis/go-redis/v9"
 	logrus "github.com/sirupsen/logrus"
 )
@@ -46,6 +48,34 @@ type Scheduler struct {
 	framework   *lib.FrameworkInfo
 	runCancel   context.CancelFunc
 	running     bool
+}
+
+const schedulerReconnectBackoff = time.Second
+
+// schedulerRegistrationTokens rate-limits controller re-subscriptions. The
+// Mesos event stream can end with io.EOF when the master closes a connection;
+// without a token gate controller.Run immediately reconnects in a tight loop.
+func schedulerRegistrationTokens(ctx context.Context) <-chan struct{} {
+	tokens := make(chan struct{}, 1)
+	tokens <- struct{}{}
+	go func() {
+		ticker := time.NewTicker(schedulerReconnectBackoff)
+		defer ticker.Stop()
+		defer close(tokens)
+		for {
+			select {
+			case <-ticker.C:
+				select {
+				case tokens <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return tokens
 }
 
 func env(k, d string) string {
@@ -82,7 +112,10 @@ func floatEnv(k string, d float64) float64 {
 
 func NewScheduler(c Config) *Scheduler {
 	endpoint := strings.TrimRight(c.Master, "/") + "/api/v1/scheduler"
-	opts := []httpcli.Opt{httpcli.Endpoint(endpoint)}
+	opts := []httpcli.Opt{
+		httpcli.Endpoint(endpoint),
+		httpcli.Codec(codecs.ByMediaType[codecs.MediaTypeJSON]),
+	}
 	configOpts := []httpcli.ConfigOpt{httpcli.Timeout(15 * time.Second)}
 	if c.InsecureTLS {
 		configOpts = append(configOpts, httpcli.TLSConfig(&tls.Config{InsecureSkipVerify: true}))
@@ -151,8 +184,7 @@ func (s *Scheduler) restoreState(b []byte) bool {
 	return true
 }
 func scalar(name string, v float64) lib.Resource {
-	typeValue := lib.SCALAR
-	return lib.Resource{Name: name, Type: &typeValue, Scalar: &lib.Value_Scalar{Value: v}}
+	return lib.Resource{Name: name, Type: lib.SCALAR, Scalar: &lib.Value_Scalar{Value: v}}
 }
 func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	cmd := fmt.Sprintf("valkey-server --port %d", s.cfg.Port)
@@ -168,21 +200,28 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 func (s *Scheduler) nextRole() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	master := false
+	// Check if there is a master in TASK_RUNNING state
+	masterRunning := false
 	for _, t := range s.tasks {
 		if t.Role == "master" && t.State == "TASK_RUNNING" {
-			master = true
+			masterRunning = true
+			break
 		}
 	}
-	if !master {
+
+	// If no master is running yet, return "master" to create a master
+	if !masterRunning {
 		return "master"
 	}
+
+	// If master is running, check for slave roles
 	for i := 1; i <= s.cfg.Slaves; i++ {
 		r := fmt.Sprintf("slave-%d", i)
 		found := false
 		for _, t := range s.tasks {
-			if t.Role == r && t.State != "TASK_FAILED" && t.State != "TASK_LOST" {
+			if t.Role == r && t.State != "TASK_FAILED" && t.State != "TASK_LOST" && t.State != "TASK_STAGING" {
 				found = true
+				break
 			}
 		}
 		if !found {
@@ -190,6 +229,7 @@ func (s *Scheduler) nextRole() string {
 		}
 	}
 
+	// All slaves are found or already running
 	return ""
 }
 func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
@@ -222,32 +262,54 @@ func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
 
 func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 	switch e.GetType() {
+	case scheduler.Event_ERROR:
+		// Mesos can invalidate a persisted framework ID. Clear it before the
+		// controller's reconnect so the next SUBSCRIBE registers a new framework.
+		if s.recordFrameworkID("") {
+			s.mu.Lock()
+			s.framework.ID = nil
+			s.mu.Unlock()
+			if s.state != nil {
+				s.save()
+			}
+		}
 	case scheduler.Event_SUBSCRIBED:
-		frameworkID := e.GetSubscribed().GetFrameworkID().GetValue()
+		frameworkID := e.GetSubscribed().FrameworkID.GetValue()
 		if frameworkID == "" {
 			return fmt.Errorf("mesos sent an empty framework ID")
 		}
 		changed := s.recordFrameworkID(frameworkID)
 		if changed {
+			s.mu.Lock()
+			if s.framework != nil {
+				s.framework.ID = &lib.FrameworkID{Value: frameworkID}
+			}
+			s.mu.Unlock()
 			s.save()
 		}
 	case scheduler.Event_OFFERS:
+		callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		for _, o := range e.GetOffers().GetOffers() {
 			role := s.nextRole()
 			if role == "" || !s.desired {
-				_ = calls.CallNoData(ctx, s.caller, calls.Decline(o.ID).With(calls.RefuseSeconds(180*time.Second)))
+				if err := calls.CallNoData(callCtx, s.caller, calls.Decline(o.ID).With(calls.Framework(s.currentFrameworkID())).With(calls.RefuseSeconds(180*time.Second))); err != nil {
+					logrus.WithError(err).WithField("offer_id", o.ID.Value).Error("mesos offer decline failed")
+				}
 				continue
 			}
 
 			// Check if offer has sufficient CPU and Memory resources
 			if !s.checkOfferResources(o) {
-				_ = calls.CallNoData(ctx, s.caller, calls.Decline(o.ID).With(calls.RefuseSeconds(5*time.Second)))
+				if err := calls.CallNoData(callCtx, s.caller, calls.Decline(o.ID).With(calls.Framework(s.currentFrameworkID())).With(calls.RefuseSeconds(5*time.Second))); err != nil {
+					logrus.WithError(err).WithField("offer_id", o.ID.Value).Error("mesos offer resource decline failed")
+				}
 				continue
 			}
 
 			id := fmt.Sprintf("%s-%d", role, time.Now().UnixNano())
 			ti := s.buildTaskInfo(role, id, o)
-			err := calls.CallNoData(ctx, s.caller, calls.Accept(calls.OfferOperations{calls.OpLaunch(ti)}.WithOffers(o.ID)).With(calls.RefuseSeconds(5*time.Second)))
+			err := calls.CallNoData(callCtx, s.caller, calls.Accept(calls.OfferOperations{calls.OpLaunch(ti)}.WithOffers(o.ID)).With(calls.Framework(s.currentFrameworkID())).With(calls.RefuseSeconds(5*time.Second)))
 			if err == nil {
 				s.mu.Lock()
 				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, Port: s.cfg.Port, Updated: time.Now()}
@@ -291,7 +353,7 @@ func (s *Scheduler) start() {
 				s.runCancel = nil
 				s.mu.Unlock()
 			}()
-			if e := controller.Run(ctx, s.framework, s.caller, controller.WithEventHandler(controller.AckStatusUpdates(s.caller).AndThen().Handle(eventHandler{s})), controller.WithFrameworkID(func() string {
+			if e := controller.Run(ctx, s.framework, s.caller, controller.WithRegistrationTokens(schedulerRegistrationTokens(ctx)), controller.WithEventHandler(controller.AckStatusUpdates(s.caller).AndThen().Handle(eventHandler{s})), controller.WithFrameworkID(func() string {
 				return s.currentFrameworkID()
 			}), controller.WithSubscriptionTerminated(func(e error) {
 				if e != nil {
@@ -316,8 +378,10 @@ func (s *Scheduler) stop() {
 type eventHandler struct{ s *Scheduler }
 
 func (h eventHandler) HandleEvent(c context.Context, e *scheduler.Event) error {
+	logrus.WithField("event_type", e.GetType().String()).WithField("event_error", e.GetError().GetMessage()).Info("mesos scheduler event received")
 	return h.s.handleEvent(c, e)
 }
+
 func (s *Scheduler) handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("ok\n")) })

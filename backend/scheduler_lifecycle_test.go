@@ -5,10 +5,10 @@ import (
 	"sync"
 	"testing"
 
-	lib "github.com/mesos/mesos-go/api/v1/lib"
-	"github.com/mesos/mesos-go/api/v1/lib/extras/scheduler/controller"
-	"github.com/mesos/mesos-go/api/v1/lib/scheduler"
-	"github.com/mesos/mesos-go/api/v1/lib/scheduler/calls"
+	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/extras/scheduler/controller"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler/calls"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -58,7 +58,7 @@ func TestSchedulerLifecycleEvents(t *testing.T) {
 		event := &scheduler.Event{
 			Type: scheduler.Event_SUBSCRIBED,
 			Subscribed: &scheduler.Event_Subscribed{
-				FrameworkID: &lib.FrameworkID{Value: "framework-test"},
+				FrameworkID: lib.FrameworkID{Value: "framework-test"},
 			},
 		}
 		if err := s.handleEvent(context.Background(), event); err != nil {

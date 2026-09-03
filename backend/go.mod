@@ -3,7 +3,7 @@ module valkey-mesos-framework
 go 1.26
 
 require (
-	github.com/m3scluster/clusterd-go v0.0.0
+	github.com/m3scluster/clusterd-go v0.0.12-0.20260902155732-6d564915ae7e
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/sirupsen/logrus v1.9.4
 )
@@ -15,5 +15,3 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 )
-
-replace github.com/m3scluster/clusterd-go => /home/andreas/Projekte/go/clusterd-go

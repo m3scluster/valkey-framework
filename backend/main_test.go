@@ -1,11 +1,34 @@
 package main
 
 import (
-	lib "github.com/mesos/mesos-go/api/v1/lib"
+	"context"
+	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestSchedulerRegistrationTokensBackoffReconnects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tokens := schedulerRegistrationTokens(ctx)
+	select {
+	case <-tokens:
+	default:
+		t.Fatal("first registration must not be delayed")
+	}
+	select {
+	case <-tokens:
+		t.Fatal("re-registration must be rate-limited")
+	case <-time.After(schedulerReconnectBackoff / 2):
+	}
+	select {
+	case <-tokens:
+	case <-time.After(schedulerReconnectBackoff + schedulerReconnectBackoff/2):
+		t.Fatal("re-registration token was not released after backoff")
+	}
+}
 
 func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
 	s := NewScheduler(Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "weave", MasterHost: "valkey-framework.mesos"})
@@ -31,6 +54,16 @@ func TestRecordFrameworkIDPersistsLatestSubscribedID(t *testing.T) {
 	}
 	if s.recordFrameworkID("framework-1") {
 		t.Fatal("unchanged framework ID must not be reported as changed")
+	}
+}
+
+func TestFrameworkErrorClearsStaleFrameworkID(t *testing.T) {
+	s := &Scheduler{frameworkID: "removed-framework", framework: &lib.FrameworkInfo{ID: &lib.FrameworkID{Value: "removed-framework"}}}
+	if err := s.handleEvent(context.Background(), &scheduler.Event{Type: scheduler.Event_ERROR, Error: &scheduler.Event_Error{Message: "Framework has been removed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.currentFrameworkID(); got != "" {
+		t.Fatalf("framework ID after removal = %q, want empty", got)
 	}
 }
 

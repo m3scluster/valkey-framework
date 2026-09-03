@@ -321,8 +321,40 @@ func (s *Scheduler) start() {
 func (s *Scheduler) stop() {
 	s.mu.Lock()
 	s.desired = false
+	frameworkID := s.frameworkID
+	type taskToKill struct{ id, role, agent string }
+	toKill := make([]taskToKill, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		if !isTerminalTaskState(task.State) {
+			toKill = append(toKill, taskToKill{id: task.ID, role: task.Role, agent: task.Agent})
+		}
+	}
+	s.mu.Unlock()
+
+	sort.Slice(toKill, func(i, j int) bool {
+		iMaster, jMaster := isMasterRole(toKill[i].role), isMasterRole(toKill[j].role)
+		if iMaster != jMaster {
+			return !iMaster
+		}
+		if toKill[i].role != toKill[j].role {
+			return toKill[i].role < toKill[j].role
+		}
+		return toKill[i].id < toKill[j].id
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for _, task := range toKill {
+		call := calls.Kill(task.id, task.agent).With(calls.Framework(frameworkID))
+		if err := calls.CallNoData(ctx, s.caller, call); err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{"task_id": task.id, "agent_id": task.agent}).Warn("failed to kill task during scheduler stop")
+		}
+	}
+
+	s.mu.Lock()
+	s.tasks = make(map[string]*Task)
 	if s.runCancel != nil {
 		s.runCancel()
+		s.runCancel = nil
 	}
 	s.mu.Unlock()
 	s.save()

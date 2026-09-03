@@ -349,6 +349,46 @@ func TestScaleDownKillsSurplusMasters(t *testing.T) {
 	}
 }
 
+func TestStopKillsSlavesBeforeMastersAndClearsTasks(t *testing.T) {
+	caller := &recordingCaller{}
+	s := &Scheduler{
+		cfg:         Config{Name: "test"},
+		desired:     true,
+		frameworkID: "framework-test",
+		tasks: map[string]*Task{
+			"master-task":  {ID: "master-task", Role: "master", State: "TASK_RUNNING", Agent: "agent-master"},
+			"slave-2-task": {ID: "slave-2-task", Role: "slave-2", State: "TASK_RUNNING", Agent: "agent-2"},
+			"slave-1-task": {ID: "slave-1-task", Role: "slave-1", State: "TASK_RUNNING", Agent: "agent-1"},
+			"finished":     {ID: "finished", Role: "slave-3", State: "TASK_FINISHED", Agent: "agent-3"},
+		},
+		caller: caller,
+	}
+
+	s.stop()
+
+	callsSeen := caller.snapshot()
+	if len(callsSeen) != 3 {
+		t.Fatalf("Mesos calls = %d, want three KILL calls", len(callsSeen))
+	}
+	want := []struct{ id, agent string }{
+		{"slave-1-task", "agent-1"},
+		{"slave-2-task", "agent-2"},
+		{"master-task", "agent-master"},
+	}
+	for i, expected := range want {
+		call := callsSeen[i]
+		if call.GetType() != scheduler.Call_KILL || call.GetKill().GetTaskID().Value != expected.id || call.GetKill().GetAgentID().GetValue() != expected.agent {
+			t.Fatalf("call %d = %#v, want KILL task=%s agent=%s", i, call, expected.id, expected.agent)
+		}
+		if got := call.GetFrameworkID().GetValue(); got != "framework-test" {
+			t.Fatalf("call %d framework ID = %q, want framework-test", i, got)
+		}
+	}
+	if s.desired || len(s.tasks) != 0 {
+		t.Fatalf("scheduler after stop = desired=%v tasks=%v, want false and no tasks", s.desired, s.tasks)
+	}
+}
+
 func TestScaleUpFromLegacyMasterSchedulesSecondMaster(t *testing.T) {
 	s := &Scheduler{cfg: Config{Masters: 2, Slaves: 1}, tasks: map[string]*Task{
 		"legacy": {ID: "legacy", Role: "master", State: "TASK_RUNNING"},

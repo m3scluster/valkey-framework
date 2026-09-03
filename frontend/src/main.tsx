@@ -2,14 +2,86 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
-type Task={id:string;name:string;state:string;host?:string;address?:string};
-type Cluster={desiredNodes:number;runningNodes:number;healthyNodes:number;status:string;tasks:Task[]};
-type Metric={taskId:string;node:string;uptimeSeconds?:number;connectedClients?:number;usedMemoryBytes?:number;opsPerSecond?:number;status:string};
-const nf=new Intl.NumberFormat('en-US');
-async function api<T>(url:string,init?:RequestInit):Promise<T>{const r=await fetch(url,{...init,headers:{'Content-Type':'application/json',...(init?.headers||{})}});if(!r.ok) throw new Error((await r.text())||`HTTP ${r.status}`);return r.json()}
-function App(){const [cluster,setCluster]=useState<Cluster|null>(null),[metrics,setMetrics]=useState<Metric[]>([]),[nodes,setNodes]=useState(3),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const load=useCallback(async()=>{try{const [c,m]=await Promise.all([api<Cluster>('/api/cluster'),api<Metric[]>('/api/metrics')]);setCluster(c);setMetrics(m);setNodes(c.desiredNodes);setError('')}catch(e){setError(e instanceof Error?e.message:'Backend not reachable')}},[]);
- useEffect(()=>{load();const id=setInterval(load,5000);return()=>clearInterval(id)},[load]);
- async function scale(){setBusy(true);try{await api('/api/cluster/scale',{method:'PUT',body:JSON.stringify({nodes})});await load()}catch(e){setError(e instanceof Error?e.message:'Scaling failed')}finally{setBusy(false)}}
- const running=cluster?.runningNodes??0;return <div className="shell"><aside><div className="brand"><span className="mark">V</span><div><b>VALKEY</b><small>CONTROL PLANE</small></div></div><nav><a className="active">◈ Overview</a><a>◌ Nodes</a><a>⌁ Events</a></nav><div className="sidefoot"><span className="pulse"/> Mesos connected</div></aside><main><header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot"/> LIVE <span className="divider"/> {new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div></header>{error&&<div className="alert">⚠ {error}</div>}<section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{cluster?.status||'Loading'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{running}<i> / {cluster?.desiredNodes??'—'}</i></strong><span>active nodes</span></div></section><div className="grid"><article className="card metric"><span className="label">HEALTH</span><strong>{cluster?`${cluster.healthyNodes} / ${cluster.runningNodes}`:'—'}</strong><span className="good">● Healthy Nodes</span></article><article className="card metric"><span className="label">OPERATIONS / SECOND</span><strong>{nf.format(Math.round(metrics.reduce((n,m)=>n+(m.opsPerSecond||0),0)))}</strong><span className="muted">from live metrics</span></article><article className="card metric"><span className="label">USED MEMORY</span><strong>{nf.format(Math.round(metrics.reduce((n,m)=>n+(m.usedMemoryBytes||0),0)/1048576))} <em>MB</em></strong><span className="muted">all nodes</span></article></div><section className="card control"><div><span className="label">CAPACITY</span><h3>Adjust node count</h3><p>The scheduler automatically aligns with the desired number.</p></div><div className="scale"><label htmlFor="nodes">TARGET NODES</label><input id="nodes" type="number" min="3" max="100" value={nodes} onChange={e=>setNodes(Number(e.target.value))}/><button onClick={scale} disabled={busy||nodes<3||nodes>100}>{busy?'Applying...':'Apply changes'}</button></div></section><section className="nodes-head"><div><span className="label">INSTANCES</span><h3>Valkey Nodes</h3></div><span className="refresh">Refreshes every 5 seconds</span></section><div className="node-grid">{cluster?.tasks?.length?cluster.tasks.map((t,i)=><article className="node card" key={t.id}><div className="node-top"><span className="node-icon">V</span><span className={t.state==='RUNNING'?'badge running':'badge'}>{t.state}</span></div><h3>valkey-{String(i+1).padStart(2,'0')}</h3><p>{t.host||t.address||'Mesos Agent will be assigned'}</p><div className="node-data"><span>UPTIME <b>{metrics[i]?.uptimeSeconds?`${Math.floor(metrics[i].uptimeSeconds/3600)}h`:'—'}</b></span><span>CLIENTS <b>{metrics[i]?.connectedClients??'—'}</b></span></div></article>):<div className="empty card">No nodes registered yet. The scheduler is waiting for Mesos Offers.</div>}</div></main></div>}
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+type Task = { ID: string; Role: string; State: string; Host?: string; Port?: number; Updated?: string };
+type Status = { framework_id: string; desired: boolean; tasks: Record<string, Task> };
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(body || `HTTP ${response.status}`);
+  return (body ? JSON.parse(body) : undefined) as T;
+}
+
+function ValkeyClusterMark() {
+  return <svg className="cluster-mark" viewBox="0 0 44 36" role="img" aria-label="ClusterD Valkey mark">
+    <path className="mark-network" d="M5 18 13 7l9 11 9-11 8 11-8 11-9-11-9 11Z" />
+    <path className="mark-chevron" d="m10 18 7-7 7 7-7 7Z" />
+    <path className="mark-chevron mark-chevron-second" d="m24 18 7-7 7 7-7 7Z" />
+    <circle className="mark-node" cx="5" cy="18" r="2.4" /><circle className="mark-node" cx="13" cy="7" r="2.4" /><circle className="mark-node" cx="13" cy="29" r="2.4" />
+  </svg>;
+}
+
+function App() {
+  const [status, setStatus] = useState<Status | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      setStatus(await api<Status>('/api/status'));
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backend not reachable');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const id = window.setInterval(() => void load(), 5000);
+    return () => window.clearInterval(id);
+  }, [load]);
+
+  async function stopCluster() {
+    setBusy(true);
+    setError('');
+    try {
+      await api<void>('/api/stop', { method: 'POST' });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const desired = status?.desired ?? false;
+  // The scheduler status is authoritative. Terminal/staged records are not live nodes.
+  const tasks = desired && status ? Object.values(status.tasks).filter(task => task.State === 'TASK_RUNNING') : [];
+  const running = tasks.length;
+
+  return <div className="shell">
+    <aside>
+      <div className="brand"><ValkeyClusterMark /><div><b>VALKEY</b><small>CONTROL PLANE</small></div></div>
+      <nav><a className="active">◈ Overview</a><a>◌ Nodes</a><a>⌁ Events</a></nav>
+      <div className="sidefoot"><span className="pulse" /> Mesos connected</div>
+    </aside>
+    <main>
+      <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></header>
+      {error && <div className="alert" role="alert">⚠ {error}</div>}
+      <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{running}<i> / {desired && status ? Object.keys(status.tasks).length : 0}</i></strong><span>active nodes</span></div></section>
+      <div className="grid">
+        <article className="card metric"><span className="label">HEALTH</span><strong>{status ? `${running} / ${running}` : '—'}</strong><span className="good">● Running Nodes</span></article>
+        <article className="card metric"><span className="label">FRAMEWORK ID</span><strong className="compact">{status?.framework_id || 'Not registered'}</strong><span className="muted">scheduler registration</span></article>
+        <article className="card metric"><span className="label">DESIRED STATE</span><strong>{status ? (desired ? 'ON' : 'OFF') : '—'}</strong><span className="muted">controlled by scheduler</span></article>
+      </div>
+      <section className="card control"><div><span className="label">DEPLOYMENT</span><h3>Scheduler-managed cluster</h3><p>The scheduler starts and reconciles the Valkey deployment. The dashboard only observes it or requests a stop.</p></div><div className="scale"><button className="danger" onClick={() => void stopCluster()} disabled={busy || !desired}>{busy ? 'Stopping…' : 'Stop cluster'}</button></div></section>
+      <section className="nodes-head"><div><span className="label">INSTANCES</span><h3>Valkey Nodes</h3></div><span className="refresh">Refreshes every 5 seconds</span></section>
+      <div className="node-grid">{tasks.length ? tasks.map(task => <article className="node card" key={task.ID}><div className="node-top"><ValkeyClusterMark /><span className="badge running">RUNNING</span></div><h3>{task.Role}</h3><p>{task.Host || 'Mesos Agent'}</p><div className="node-data"><span>PORT <b>{task.Port ?? '—'}</b></span><span>UPDATED <b>{task.Updated ? new Date(task.Updated).toLocaleTimeString('en-US') : '—'}</b></span></div></article>) : <div className="empty card">No running nodes. The scheduler is waiting for Mesos Offers.</div>}</div>
+    </main>
+  </div>;
+}
+
+createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

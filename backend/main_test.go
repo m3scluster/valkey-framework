@@ -36,10 +36,13 @@ func TestBuildTaskInfoUsesTypedMesosObjects(t *testing.T) {
 	if task.TaskID.Value != "task-1" || task.AgentID.Value != "agent-1" {
 		t.Fatalf("unexpected task identity: %#v", task)
 	}
+	if task.Name != "master" || task.Container.GetHostname() != "master" {
+		t.Fatalf("master task must use stable DNS name: %#v", task)
+	}
 	if len(task.Resources) != 2 || task.Container == nil || task.Container.Docker == nil || task.Container.Docker.Image != "valkey:test" {
 		t.Fatalf("incomplete typed task: %#v", task)
 	}
-	if len(task.Container.NetworkInfos) != 1 || task.Container.NetworkInfos[0].GetName() != "weave" {
+	if task.Container.Docker.GetNetwork() != lib.ContainerInfo_DockerInfo_USER || len(task.Container.NetworkInfos) != 1 || task.Container.NetworkInfos[0].GetName() != "weave" {
 		t.Fatalf("missing CNI network: %#v", task.Container.NetworkInfos)
 	}
 }

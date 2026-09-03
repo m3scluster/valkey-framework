@@ -54,7 +54,7 @@ export STATE_FILE=/var/lib/valkey-mesos/state.json
 
 ## Wichtige Einschränkung
 
-Das Framework weist Tasks auf Mesos-Agenten zu und fordert das konfigurierte Mesos-CNI-Netzwerk an. Es werden keine Mesos-Port-Ressourcen und keine Docker-Port-Mappings angefordert. Für die Namensauflösung wird Mesos-DNS verwendet: standardmäßig wird aus `FRAMEWORK_NAME=valkey-framework` der Master-Endpunkt `valkey-framework.mesos` gebildet. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
+Das Framework weist Tasks auf Mesos-Agenten zu und fordert das konfigurierte Mesos-CNI-Netzwerk an. Es werden keine Mesos-Port-Ressourcen und keine Docker-Port-Mappings angefordert. Für die Namensauflösung wird Mesos-DNS verwendet: Der Master wird als `master.<FRAMEWORK_NAME>.mesos` veröffentlicht. Alternativ kann `VALKEY_MASTER_HOST` gesetzt werden. Die Replikas verwenden diesen Namen auf Port `6379`. Mesos meldet die Anwendung erst nach `TASK_RUNNING` als gestartet; ein akzeptiertes Offer allein ist kein Healthcheck.
 
 `/api/stop` beendet aktuell die gewünschte Bereitstellung und verhindert weitere Starts. Das tatsächliche Killen bereits laufender Tasks kann über die native Mesos-Kill-API ergänzt werden, sobald das gewünschte Betriebsmodell (persistente Daten/Volumes und Failover) festgelegt ist.
 

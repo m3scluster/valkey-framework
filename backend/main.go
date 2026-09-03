@@ -29,6 +29,7 @@ type Config struct {
 	Password, RedisPassword                                                          string
 	RedisDB, Slaves                                                                  int
 	CPU, Memory                                                                      float64
+	DNSServer                                                                        string
 	Port                                                                             int
 	DryRun, InsecureTLS                                                              bool
 }
@@ -100,7 +101,7 @@ func loadConfig() Config {
 		}
 		master = scheme + "://" + master
 	}
-	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: env("FRAMEWORK_NAME", "valkey-framework"), User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), StateFile: env("STATE_FILE", "/tmp/valkey-mesos.json"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: env("MESOS_CNI", "weave"), MasterHost: env("VALKEY_MASTER_HOST", env("FRAMEWORK_NAME", "valkey-framework")+".mesos"), Slaves: atoi("VALKEY_SLAVES", 2), CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
+	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: env("FRAMEWORK_NAME", "valkey-framework"), User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), StateFile: env("STATE_FILE", "/tmp/valkey-mesos.json"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: env("MESOS_CNI", "weave"), DNSServer: env("MESOS_DNS_SERVER", ""), MasterHost: env("VALKEY_MASTER_HOST", "master."+env("FRAMEWORK_NAME", "valkey-framework")+".mesos"), Slaves: atoi("VALKEY_SLAVES", 2), CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(env(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
@@ -194,8 +195,17 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	shell := true
 	image := s.cfg.Image
 	typ := lib.ContainerInfo_DOCKER
+	dockerNetwork := lib.ContainerInfo_DockerInfo_USER
 	network := s.cfg.CNI
-	return lib.TaskInfo{Name: id, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: &lib.ContainerInfo{Type: &typ, Docker: &lib.ContainerInfo_DockerInfo{Image: image}, NetworkInfos: []lib.NetworkInfo{{Name: &network}}}}
+	parameters := []lib.Parameter{}
+	if s.cfg.DNSServer != "" {
+		parameters = append(parameters, lib.Parameter{Key: "dns", Value: s.cfg.DNSServer})
+	}
+	taskName := id
+	if role == "master" {
+		taskName = "master"
+	}
+	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: &lib.ContainerInfo{Type: &typ, Hostname: &taskName, Docker: &lib.ContainerInfo_DockerInfo{Image: image, Network: &dockerNetwork, Parameters: parameters}, NetworkInfos: []lib.NetworkInfo{{Name: &network}}}}
 }
 func (s *Scheduler) nextRole() string {
 	s.mu.Lock()

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -22,12 +24,12 @@ import (
 )
 
 type Config struct {
-	Master, Image, Role, Name, User, RedisServer, ValkeyMetricsAddr, CNI, Domain, MasterHost, Listen string
-	Password, RedisPassword                                                                          string
-	RedisDB, Masters, Slaves                                                                         int
-	CPU, Memory                                                                                      float64
-	Port                                                                                             int
-	DryRun, InsecureTLS                                                                              bool
+	Master, Image, Role, Name, User, RedisServer, ValkeyMetricsAddr, CNI, Domain, MasterHost, Listen, SSLKeyBase64, SSLCertBase64 string
+	Password, RedisPassword                                                                                                       string
+	RedisDB, Masters, Slaves                                                                                                      int
+	CPU, Memory                                                                                                                   float64
+	Port                                                                                                                          int
+	DryRun, InsecureTLS                                                                                                           bool
 }
 
 // This model supports one master and requires at least one replica. Keep the
@@ -108,7 +110,7 @@ func loadConfig() Config {
 	}
 	port := atoi("VALKEY_PORT", 6379)
 	metricsAddr := utils.Getenv("VALKEY_METRICS_ADDR", net.JoinHostPort(masterHost, strconv.Itoa(port)))
-	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true"}
+	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true", SSLKeyBase64: utils.Getenv("SSL_KEY_BASE64", ""), SSLCertBase64: utils.Getenv("SSL_CRT_BASE64", "")}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(utils.Getenv(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
@@ -230,13 +232,61 @@ func parseValkeyInfo(raw string) map[string]map[string]any {
 func main() {
 	c := loadConfig()
 	s := NewScheduler(c)
-	go func() {
-		if e := http.ListenAndServe(c.Listen, s.handler()); e != nil {
-			logrus.WithError(e).Error("http server failed")
-		}
-	}()
+
+	if c.SSLKeyBase64 != "" && c.SSLCertBase64 != "" {
+		go func() {
+			if e := serveHTTPS(c, s); e != nil {
+				logrus.WithError(e).Error("https server failed")
+			}
+		}()
+	} else {
+		// Fallback to HTTP
+		go func() {
+			if e := http.ListenAndServe(c.Listen, s.handler()); e != nil {
+				logrus.WithError(e).Error("http server failed")
+			}
+		}()
+	}
+
 	if utils.Getenv("START_ON_BOOT", "true") == "true" {
 		s.start()
 	}
 	select {}
+}
+
+func tlsConfigFromBase64(keyBase64, certBase64 string) (*tls.Config, error) {
+	keyBytes, err := base64.StdEncoding.DecodeString(keyBase64)
+	if err != nil {
+		return nil, fmt.Errorf("decode SSL key: %w", err)
+	}
+	certBytes, err := base64.StdEncoding.DecodeString(certBase64)
+	if err != nil {
+		return nil, fmt.Errorf("decode SSL certificate: %w", err)
+	}
+	certificate, err := tls.X509KeyPair(certBytes, keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("load SSL certificate and key: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+	}, nil
+}
+
+func serveHTTPS(c Config, s *Scheduler) error {
+	config, err := tlsConfigFromBase64(c.SSLKeyBase64, c.SSLCertBase64)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{
+		Addr:      c.Listen,
+		TLSConfig: config,
+		Handler:   s.handler(),
+	}
+	listener, err := net.Listen("tcp", c.Listen)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	return server.Serve(tls.NewListener(listener, config))
 }

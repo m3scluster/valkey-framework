@@ -92,6 +92,52 @@ func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesRedisPoolSize(t *testing.T) {
+	t.Setenv("REDIS_SERVER", "redis.example:6380")
+	t.Setenv("REDIS_PASSWORD", "secret")
+	t.Setenv("REDIS_DB", "7")
+	t.Setenv("REDIS_POOLSIZE", "10")
+	c := loadConfig()
+
+	if c.RedisServer != "redis.example:6380" {
+		t.Fatalf("RedisServer = %q, want redis.example:6380", c.RedisServer)
+	}
+	if c.RedisPassword != "secret" {
+		t.Fatalf("RedisPassword = %q, want secret", c.RedisPassword)
+	}
+	if c.RedisDB != 7 {
+		t.Fatalf("RedisDB = %d, want 7", c.RedisDB)
+	}
+	if c.RedisPoolSize != 10 {
+		t.Fatalf("RedisPoolSize = %d, want 10", c.RedisPoolSize)
+	}
+}
+
+func TestLoadConfigUsesRedisDefaults(t *testing.T) {
+	for _, key := range []string{"REDIS_SERVER", "REDIS_PASSWORD", "REDIS_DB", "REDIS_POOLSIZE"} {
+		t.Setenv(key, "")
+	}
+	c := loadConfig()
+	if c.RedisServer != "127.0.0.1:6379" || c.RedisPassword != "" || c.RedisDB != 1 || c.RedisPoolSize != 0 {
+		t.Fatalf("Redis config defaults = (%q, %q, %d, %d), want (127.0.0.1:6379, empty, 1, 0)", c.RedisServer, c.RedisPassword, c.RedisDB, c.RedisPoolSize)
+	}
+}
+
+func TestNewRedisClientUsesRedisConfig(t *testing.T) {
+	client := newRedisClient(Config{
+		Name:          "test",
+		RedisServer:   "redis.example:6380",
+		RedisPassword: "secret",
+		RedisDB:       7,
+		RedisPoolSize: 10,
+	})
+	defer client.Close()
+	options := client.Options()
+	if options.Addr != "redis.example:6380" || options.Password != "secret" || options.DB != 7 || options.PoolSize != 10 {
+		t.Fatalf("Redis client options = (addr=%q, password=%q, db=%d, pool=%d), want configured values", options.Addr, options.Password, options.DB, options.PoolSize)
+	}
+}
+
 func TestRecordFrameworkIDPersistsLatestSubscribedID(t *testing.T) {
 	s := &Scheduler{}
 	if !s.recordFrameworkID("framework-1") {

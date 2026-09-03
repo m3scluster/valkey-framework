@@ -26,7 +26,7 @@ import (
 type Config struct {
 	Master, Image, Role, Name, User, RedisServer, ValkeyMetricsAddr, CNI, Domain, MasterHost, Listen, SSLKeyBase64, SSLCertBase64 string
 	Password, RedisPassword                                                                                                       string
-	RedisDB, Masters, Slaves                                                                                                      int
+	RedisDB, Masters, Slaves, RedisPoolSize                                                                                       int
 	CPU, Memory                                                                                                                   float64
 	Port                                                                                                                          int
 	DryRun, InsecureTLS                                                                                                           bool
@@ -110,7 +110,7 @@ func loadConfig() Config {
 	}
 	port := atoi("VALKEY_PORT", 6379)
 	metricsAddr := utils.Getenv("VALKEY_METRICS_ADDR", net.JoinHostPort(masterHost, strconv.Itoa(port)))
-	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true", SSLKeyBase64: utils.Getenv("SSL_KEY_BASE64", ""), SSLCertBase64: utils.Getenv("SSL_CRT_BASE64", "")}
+	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "127.0.0.1:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 1), RedisPoolSize: atoi("REDIS_POOLSIZE", 0), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true", SSLKeyBase64: utils.Getenv("SSL_KEY_BASE64", ""), SSLCertBase64: utils.Getenv("SSL_CRT_BASE64", "")}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(utils.Getenv(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
@@ -118,6 +118,15 @@ func floatEnv(k string, d float64) float64 {
 		return d
 	}
 	return v
+}
+
+func newRedisClient(c Config) *redis.Client {
+	return redis.NewClient(&redis.Options{
+		Addr:     c.RedisServer,
+		Password: c.RedisPassword,
+		DB:       c.RedisDB,
+		PoolSize: c.RedisPoolSize,
+	})
 }
 
 func NewScheduler(c Config) *Scheduler {
@@ -137,7 +146,7 @@ func NewScheduler(c Config) *Scheduler {
 	cli := httpcli.New(opts...)
 	ft := float64(3600)
 	role := c.Role
-	s := &Scheduler{cfg: c, tasks: map[string]*Task{}, state: redis.NewClient(&redis.Options{Addr: c.RedisServer, Password: c.RedisPassword, DB: c.RedisDB}), caller: httpsched.NewCaller(cli), framework: &lib.FrameworkInfo{User: c.User, Name: c.Name, Role: &role, FailoverTimeout: &ft}}
+	s := &Scheduler{cfg: c, tasks: map[string]*Task{}, state: newRedisClient(c), caller: httpsched.NewCaller(cli), framework: &lib.FrameworkInfo{User: c.User, Name: c.Name, Role: &role, FailoverTimeout: &ft}}
 	s.metricsReader = redisInfoReader{client: redis.NewClient(&redis.Options{Addr: c.ValkeyMetricsAddr})}
 	s.load()
 	return s

@@ -4,7 +4,6 @@ set -euo pipefail
 export MESOS_MASTER="${MESOS_MASTER:-devtest.lab.internal:5050}"
 export MESOS_SSL="${MESOS_SSL:-true}"
 export MESOS_TLS_INSECURE="${MESOS_TLS_INSECURE:-true}"
-export MESOS_DNS_SERVER="${MESOS_DNS_SERVER:-172.17.0.1}"
 export MESOS_USERNAME="${MESOS_USERNAME:-mesos}"
 export MESOS_PASSWORD="${MESOS_PASSWORD:-test}"
 export LISTEN_ADDR="${LISTEN_ADDR:-0.0.0.0:8080}"

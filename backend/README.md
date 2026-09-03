@@ -40,7 +40,6 @@ export REDIS_DB=10
 # optional: export REDIS_PASSWORD='aus sicherer Laufzeitumgebung'
 export MESOS_CNI=weave
 export MESOS_DOMAIN=mesos
-export MESOS_DNS_SERVER=172.17.0.1
 # Standard ist: master.<FRAMEWORK_NAME>.<MESOS_DOMAIN>
 # optional: export VALKEY_MASTER_HOST=master.valkey-framework.mesos
 export MESOS_ROLE='*'

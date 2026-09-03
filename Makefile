@@ -1,7 +1,7 @@
 .PHONY: run build test clean
 
 run:
-	@set -e; $(MAKE) build; (cd backend && MESOS_MASTER=$${MESOS_MASTER:-} MESOS_USERNAME=$${MESOS_USERNAME:-} MESOS_PASSWORD=$${MESOS_PASSWORD:-} LISTEN_ADDR=$${LISTEN_ADDR:-0.0.0.0:10001} ./valkey-mesos) & backend_pid=$$!; (cd frontend && npm run dev -- --host 0.0.0.0) & frontend_pid=$$!; trap 'kill $$backend_pid $$frontend_pid 2>/dev/null || true' INT TERM EXIT; wait $$backend_pid $$frontend_pid
+	@set -e; $(MAKE) build; ./run.sh & backend_pid=$$!; (cd frontend && npm run dev -- --host 0.0.0.0) & frontend_pid=$$!; trap 'kill $$backend_pid $$frontend_pid 2>/dev/null || true' INT TERM EXIT; wait $$backend_pid $$frontend_pid
 
 build:
 	(cd backend && go build -o valkey-mesos .)

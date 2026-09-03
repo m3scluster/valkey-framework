@@ -32,6 +32,11 @@ type Config struct {
 	Port                                                                                     int
 	DryRun, InsecureTLS                                                                      bool
 }
+
+// This model supports one master and requires at least one replica. Keep the
+// invariant in the backend so callers cannot weaken it by bypassing the UI.
+const minSlaves = 1
+
 type Task struct {
 	ID, Role, State, Agent, Host string
 	Port                         int
@@ -117,7 +122,11 @@ func loadConfig() Config {
 	if domain != "" {
 		masterHost += "." + domain
 	}
-	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), StateFile: env("STATE_FILE", "/tmp/valkey-mesos.json"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Slaves: atoi("VALKEY_SLAVES", 2), CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
+	slaves := atoi("VALKEY_SLAVES", 2)
+	if slaves < minSlaves {
+		slaves = minSlaves
+	}
+	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), StateFile: env("STATE_FILE", "/tmp/valkey-mesos.json"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: atoi("VALKEY_PORT", 6379), Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(env(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
@@ -167,7 +176,9 @@ func (s *Scheduler) save() {
 	defer s.mu.Unlock()
 	b, _ := json.Marshal(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "tasks": s.tasks, "config": s.cfg})
 	_ = os.WriteFile(s.cfg.StateFile, b, 0600)
-	_ = s.state.Set(context.Background(), s.cfg.Name+":state", b, 0).Err()
+	if s.state != nil {
+		_ = s.state.Set(context.Background(), s.cfg.Name+":state", b, 0).Err()
+	}
 }
 func (s *Scheduler) load() {
 	// Redis is the durable source of truth when it contains a valid state.
@@ -432,7 +443,7 @@ func (s *Scheduler) handler() http.Handler {
 	m.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "tasks": s.tasks})
+		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "masters": 1, "slaves": s.cfg.Slaves, "min_slaves": minSlaves, "tasks": s.tasks})
 	})
 	m.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -453,6 +464,30 @@ func (s *Scheduler) handler() http.Handler {
 	})
 	m.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) { s.start(); w.WriteHeader(202) })
 	m.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) { s.stop(); w.WriteHeader(202) })
+	m.HandleFunc("/api/scale", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var request struct {
+			Slaves int `json:"slaves"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid JSON request", http.StatusBadRequest)
+			return
+		}
+		if request.Slaves < minSlaves {
+			http.Error(w, fmt.Sprintf("at least %d slave required", minSlaves), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.cfg.Slaves = request.Slaves
+		s.mu.Unlock()
+		s.save()
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"masters": 1, "slaves": request.Slaves, "min_slaves": minSlaves})
+	})
 	return m
 }
 func main() {

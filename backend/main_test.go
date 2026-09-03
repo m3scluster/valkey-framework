@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
-	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
-	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
+	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
+	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
 )
 
 func TestSchedulerRegistrationTokensBackoffReconnects(t *testing.T) {
@@ -61,9 +65,13 @@ func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
 	t.Setenv("FRAMEWORK_NAME", "valkey-test")
 	t.Setenv("MESOS_DOMAIN", "cluster.internal")
 	t.Setenv("MESOS_CNI", "")
+	t.Setenv("VALKEY_SLAVES", "0")
 	c := loadConfig()
 	if c.CNI != "" {
 		t.Fatalf("CNI = %q, want empty", c.CNI)
+	}
+	if c.Slaves != minSlaves {
+		t.Fatalf("Slaves = %d, want minimum %d", c.Slaves, minSlaves)
 	}
 	if c.Domain != "cluster.internal" {
 		t.Fatalf("Domain = %q, want cluster.internal", c.Domain)
@@ -147,6 +155,39 @@ func TestMetricsEndpointCountsTaskStates(t *testing.T) {
 	}
 	if got.Total != 4 || got.Running != 1 || got.Staging != 1 || got.Failed != 2 {
 		t.Fatalf("metrics = %#v, want total=4 running=1 staging=1 failed=2", got)
+	}
+}
+
+func TestScaleEndpointValidatesAndPersistsTarget(t *testing.T) {
+	stateFile := t.TempDir() + "/state.json"
+	s := &Scheduler{cfg: Config{Name: "test", Slaves: 2, StateFile: stateFile}, tasks: map[string]*Task{}}
+	handler := s.handler()
+
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, httptest.NewRequest("POST", "/api/scale", strings.NewReader(`{"slaves":0}`)))
+	if invalid.Code != http.StatusBadRequest || s.cfg.Slaves != 2 {
+		t.Fatalf("invalid scale: status=%d slaves=%d", invalid.Code, s.cfg.Slaves)
+	}
+
+	valid := httptest.NewRecorder()
+	handler.ServeHTTP(valid, httptest.NewRequest("POST", "/api/scale", strings.NewReader(`{"slaves":4}`)))
+	if valid.Code != http.StatusAccepted || s.cfg.Slaves != 4 {
+		t.Fatalf("valid scale: status=%d slaves=%d", valid.Code, s.cfg.Slaves)
+	}
+	persisted, err := os.ReadFile(stateFile)
+	if err != nil || !strings.Contains(string(persisted), `"Slaves":4`) {
+		t.Fatalf("scaled target was not persisted: err=%v state=%s", err, persisted)
+	}
+
+	status := httptest.NewRecorder()
+	handler.ServeHTTP(status, httptest.NewRequest("GET", "/api/status", nil))
+	var got struct {
+		Masters   int `json:"masters"`
+		Slaves    int `json:"slaves"`
+		MinSlaves int `json:"min_slaves"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &got); err != nil || got.Masters != 1 || got.Slaves != 4 || got.MinSlaves != minSlaves {
+		t.Fatalf("status scaling metadata = %#v, err=%v", got, err)
 	}
 }
 

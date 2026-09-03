@@ -257,8 +257,6 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 			}
 		}
 	case scheduler.Event_UPDATE:
-		callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 		st := e.GetUpdate().GetStatus()
 		s.mu.Lock()
 		if t := s.tasks[st.TaskID.Value]; t != nil {
@@ -271,12 +269,6 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 		}
 		s.mu.Unlock()
 		s.save()
-		if len(st.UUID) > 0 {
-			ack := calls.Acknowledge(st.AgentID.Value, st.TaskID.Value, st.UUID).With(calls.Framework(s.currentFrameworkID()))
-			if err := calls.CallNoData(callCtx, s.caller, ack); err != nil {
-				logrus.WithError(err).WithField("task_id", st.TaskID.Value).Error("mesos status acknowledgement failed")
-			}
-		}
 	}
 	return nil
 }

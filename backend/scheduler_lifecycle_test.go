@@ -15,13 +15,14 @@ import (
 type recordingCaller struct {
 	mu    sync.Mutex
 	calls []*scheduler.Call
+	err   error
 }
 
 func (c *recordingCaller) Call(_ context.Context, call *scheduler.Call) (lib.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, call)
-	return nil, nil
+	return nil, c.err
 }
 
 func (c *recordingCaller) snapshot() []*scheduler.Call {
@@ -150,6 +151,27 @@ func TestAckStatusUpdateSendsAcknowledgeCall(t *testing.T) {
 	}
 	if got := ack.GetAcknowledge().GetUUID(); string(got) != string([]byte{1, 2, 3}) {
 		t.Fatalf("ack UUID = %v, want [1 2 3]", got)
+	}
+}
+
+func TestEventHandlerUsesAckRuleAndPropagatesAckError(t *testing.T) {
+	caller := &recordingCaller{err: context.Canceled}
+	s := testScheduler(caller)
+	s.frameworkID = "framework-1"
+	state := lib.TASK_RUNNING
+	event := &scheduler.Event{Type: scheduler.Event_UPDATE, Update: &scheduler.Event_Update{Status: lib.TaskStatus{
+		TaskID: lib.TaskID{Value: "task-1"}, AgentID: &lib.AgentID{Value: "agent-1"}, State: &state, UUID: []byte{1, 2, 3},
+	}}}
+
+	if err := (eventHandler{s: s}).HandleEvent(context.Background(), event); err == nil {
+		t.Fatal("event handler must return an ACK failure")
+	}
+	callsSeen := caller.snapshot()
+	if len(callsSeen) != 1 || callsSeen[0].GetType() != scheduler.Call_ACKNOWLEDGE {
+		t.Fatalf("calls = %#v, want one ACKNOWLEDGE", callsSeen)
+	}
+	if got := callsSeen[0].GetFrameworkID().GetValue(); got != "framework-1" {
+		t.Fatalf("ACK framework ID = %q, want framework-1", got)
 	}
 }
 

@@ -434,6 +434,23 @@ func (s *Scheduler) handler() http.Handler {
 		defer s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "tasks": s.tasks})
 	})
+	m.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		counts := map[string]int{}
+		for _, task := range s.tasks {
+			counts[task.State]++
+		}
+		metrics := map[string]any{
+			"framework_id": s.frameworkID,
+			"desired":      s.desired,
+			"total":        len(s.tasks),
+			"running":      counts["TASK_RUNNING"],
+			"staging":      counts["TASK_STAGING"],
+			"failed":       counts["TASK_FAILED"] + counts["TASK_LOST"],
+		}
+		_ = json.NewEncoder(w).Encode(metrics)
+	})
 	m.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) { s.start(); w.WriteHeader(202) })
 	m.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) { s.stop(); w.WriteHeader(202) })
 	return m

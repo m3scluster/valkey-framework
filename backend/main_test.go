@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
 	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -119,6 +121,32 @@ func TestRestoreStateRejectsInvalidJSON(t *testing.T) {
 	}
 	if s.frameworkID != "keep" || !s.desired || len(s.tasks) != 1 {
 		t.Fatalf("invalid state changed scheduler: %#v", s)
+	}
+}
+
+func TestMetricsEndpointCountsTaskStates(t *testing.T) {
+	s := &Scheduler{frameworkID: "framework-1", desired: true, tasks: map[string]*Task{
+		"running": {State: "TASK_RUNNING"},
+		"staging": {State: "TASK_STAGING"},
+		"failed":  {State: "TASK_FAILED"},
+		"lost":    {State: "TASK_LOST"},
+	}}
+	recording := httptest.NewRecorder()
+	s.handler().ServeHTTP(recording, httptest.NewRequest("GET", "/api/metrics", nil))
+	if recording.Code != 200 {
+		t.Fatalf("metrics status = %d, want 200", recording.Code)
+	}
+	var got struct {
+		Total   int `json:"total"`
+		Running int `json:"running"`
+		Staging int `json:"staging"`
+		Failed  int `json:"failed"`
+	}
+	if err := json.Unmarshal(recording.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	if got.Total != 4 || got.Running != 1 || got.Staging != 1 || got.Failed != 2 {
+		t.Fatalf("metrics = %#v, want total=4 running=1 staging=1 failed=2", got)
 	}
 }
 

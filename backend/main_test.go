@@ -242,3 +242,21 @@ func TestNextRole(t *testing.T) {
 		t.Fatalf("Expected \"\" when all slaves are running, got %q", next)
 	}
 }
+
+func TestStatusIncludesWarningsForResourceShortageAndFailedRole(t *testing.T) {
+	s := &Scheduler{frameworkID: "framework-1", desired: true, cfg: Config{Slaves: 1}, tasks: map[string]*Task{
+		"master-failed": {ID: "master-failed", Role: "master", State: "TASK_FAILED"},
+	}}
+	s.resourceShortage = true
+	recording := httptest.NewRecorder()
+	s.handler().ServeHTTP(recording, httptest.NewRequest("GET", "/api/status", nil))
+	var got struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(recording.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if len(got.Warnings) != 2 || !strings.Contains(strings.Join(got.Warnings, " "), "resources") || !strings.Contains(strings.Join(got.Warnings, " "), "master") {
+		t.Fatalf("warnings = %#v, want resource and failed master warnings", got.Warnings)
+	}
+}

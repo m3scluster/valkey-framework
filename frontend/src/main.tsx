@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './style.css';
 
 type Task = { ID: string; Role: string; State: string; Host?: string; Port?: number; Updated?: string };
-type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_slaves: number; tasks: Record<string, Task> };
+type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
 type Metrics = { framework_id: string; desired: boolean; total: number; running: number; staging: number; failed: number };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -120,6 +120,7 @@ function App() {
     <main>
       <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></header>
       {error && <div className="alert" role="alert">⚠ {error}</div>}
+      {status?.warnings?.map((warning, index) => <div className="alert scheduler-warning" role="alert" key={`${warning}-${index}`}>⚠ {warning}</div>)}
       <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {metricsTotal}</i></strong><span>active nodes</span></div></section>
       <div className="grid">
         <article className="card metric"><span className="label">HEALTH</span><strong>{status ? `${metricsRunning} / ${metricsRunning}` : '—'}</strong><span className="good">● Running Nodes</span></article>

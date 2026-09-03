@@ -42,17 +42,19 @@ type Task struct {
 	Port                         int
 	Updated                      time.Time
 }
+
 type Scheduler struct {
-	cfg         Config
-	mu          sync.Mutex
-	frameworkID string
-	desired     bool
-	tasks       map[string]*Task
-	state       *redis.Client
-	caller      calls.Caller
-	framework   *lib.FrameworkInfo
-	runCancel   context.CancelFunc
-	running     bool
+	cfg              Config
+	mu               sync.Mutex
+	frameworkID      string
+	desired          bool
+	tasks            map[string]*Task
+	state            *redis.Client
+	caller           calls.Caller
+	framework        *lib.FrameworkInfo
+	runCancel        context.CancelFunc
+	running          bool
+	resourceShortage bool
 }
 
 const schedulerReconnectBackoff = time.Second
@@ -320,6 +322,40 @@ func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
 	return true
 }
 
+// warningsLocked reports conditions that currently prevent the desired
+// topology from being available. It must be called while s.mu is held.
+func (s *Scheduler) warningsLocked() []string {
+	if !s.desired {
+		return nil
+	}
+	warnings := make([]string, 0, 1)
+	if s.resourceShortage {
+		warnings = append(warnings, fmt.Sprintf("Mesos offers do not provide enough resources (need %.2f CPU and %.0f MB memory)", s.cfg.CPU, s.cfg.Memory))
+	}
+	for i := 0; i <= s.cfg.Slaves; i++ {
+		role := "master"
+		if i > 0 {
+			role = fmt.Sprintf("slave-%d", i)
+		}
+		failed, live := false, false
+		for _, task := range s.tasks {
+			if task.Role != role {
+				continue
+			}
+			switch task.State {
+			case "TASK_FAILED", "TASK_LOST", "TASK_ERROR", "TASK_KILLED":
+				failed = true
+			case "TASK_RUNNING", "TASK_STAGING", "TASK_STARTING", "TASK_UNKNOWN":
+				live = true
+			}
+		}
+		if failed && !live {
+			warnings = append(warnings, fmt.Sprintf("Unable to start %s: the last task failed or was lost", role))
+		}
+	}
+	return warnings
+}
+
 func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 	switch e.GetType() {
 	case scheduler.Event_ERROR:
@@ -361,6 +397,9 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 
 			// Check if offer has sufficient CPU and Memory resources
 			if !s.checkOfferResources(o) {
+				s.mu.Lock()
+				s.resourceShortage = true
+				s.mu.Unlock()
 				if err := calls.CallNoData(callCtx, s.caller, calls.Decline(o.ID).With(calls.Framework(s.currentFrameworkID())).With(calls.RefuseSeconds(5*time.Second))); err != nil {
 					logrus.WithError(err).WithField("offer_id", o.ID.Value).Error("mesos offer resource decline failed")
 				}
@@ -372,6 +411,7 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 			err := calls.CallNoData(callCtx, s.caller, calls.Accept(calls.OfferOperations{calls.OpLaunch(ti)}.WithOffers(o.ID)).With(calls.Framework(s.currentFrameworkID())).With(calls.RefuseSeconds(5*time.Second)))
 			if err == nil {
 				s.mu.Lock()
+				s.resourceShortage = false
 				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, Port: s.cfg.Port, Updated: time.Now()}
 				s.mu.Unlock()
 				s.save()
@@ -456,7 +496,7 @@ func (s *Scheduler) handler() http.Handler {
 	m.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "masters": 1, "slaves": s.cfg.Slaves, "min_slaves": minSlaves, "tasks": s.tasks})
+		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "masters": 1, "slaves": s.cfg.Slaves, "min_slaves": minSlaves, "warnings": s.warningsLocked(), "tasks": s.tasks})
 	})
 	m.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()

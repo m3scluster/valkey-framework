@@ -8,7 +8,6 @@ import (
 
 	"net"
 	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler/calls"
 	"github.com/redis/go-redis/v9"
 	logrus "github.com/sirupsen/logrus"
+	"valkey-mesos-framework/utils"
 )
 
 type Config struct {
@@ -99,41 +99,32 @@ func schedulerRegistrationTokens(ctx context.Context) <-chan struct{} {
 	return tokens
 }
 
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
-}
-func envValue(k, d string) string {
-	if v, ok := os.LookupEnv(k); ok {
-		return v
-	}
-	return d
-}
 func atoi(k string, d int) int {
-	v, e := strconv.Atoi(env(k, strconv.Itoa(d)))
+	v, e := strconv.Atoi(utils.Getenv(k, strconv.Itoa(d)))
 	if e != nil {
 		return d
 	}
 	return v
 }
 func loadConfig() Config {
-	master := env("MESOS_MASTER", "127.0.0.1:5050")
+	master := utils.Getenv("MESOS_MASTER", "127.0.0.1:5050")
 	if !strings.Contains(master, "://") {
 		scheme := "http"
-		if env("MESOS_SSL", "false") == "true" {
+		if utils.Getenv("MESOS_SSL", "false") == "true" {
 			scheme = "https"
 		}
 		master = scheme + "://" + master
 	}
-	name := env("FRAMEWORK_NAME", "valkey-framework")
-	cni := envValue("MESOS_CNI", "weave")
+	name := utils.Getenv("FRAMEWORK_NAME", "valkey-framework")
+	cni := utils.Getenv("MESOS_CNI", "weave")
+	if value, ok := utils.LookupEnv("MESOS_CNI"); ok {
+		cni = value
+	}
 	domainDefault := "mesos"
 	if cni == "weave" {
 		domainDefault = "weave.local"
 	}
-	domain := strings.Trim(envValue("MESOS_DOMAIN", domainDefault), ".")
+	domain := strings.Trim(utils.Getenv("MESOS_DOMAIN", domainDefault), ".")
 	// Mesos-DNS uses the task hostname and domain; the framework name is not part
 	// of the DNS name (for example, master.weave.local).
 	masterHost := "master"
@@ -149,11 +140,11 @@ func loadConfig() Config {
 		masters = minMasters
 	}
 	port := atoi("VALKEY_PORT", 6379)
-	metricsAddr := env("VALKEY_METRICS_ADDR", net.JoinHostPort(masterHost, strconv.Itoa(port)))
-	return Config{Master: master, Image: env("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: env("MESOS_ROLE", "*"), Name: name, User: env("FRAMEWORK_USER", env("USER", "root")), Password: os.Getenv("MESOS_PASSWORD"), RedisServer: env("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: os.Getenv("REDIS_PASSWORD"), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: env("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: env("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: env("MESOS_DRY_RUN", "false") == "true", InsecureTLS: env("MESOS_TLS_INSECURE", "false") == "true"}
+	metricsAddr := utils.Getenv("VALKEY_METRICS_ADDR", net.JoinHostPort(masterHost, strconv.Itoa(port)))
+	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 10), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true"}
 }
 func floatEnv(k string, d float64) float64 {
-	v, e := strconv.ParseFloat(env(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
+	v, e := strconv.ParseFloat(utils.Getenv(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)
 	if e != nil {
 		return d
 	}
@@ -170,7 +161,7 @@ func NewScheduler(c Config) *Scheduler {
 	if c.InsecureTLS {
 		configOpts = append(configOpts, httpcli.TLSConfig(&tls.Config{InsecureSkipVerify: true}))
 	}
-	if u := os.Getenv("MESOS_USERNAME"); u != "" && c.Password != "" {
+	if u := utils.Getenv("MESOS_USERNAME", ""); u != "" && c.Password != "" {
 		configOpts = append(configOpts, httpcli.BasicAuth(u, c.Password))
 	}
 	opts = append(opts, httpcli.Do(httpcli.With(configOpts...)))
@@ -792,7 +783,7 @@ func main() {
 			logrus.WithError(e).Error("http server failed")
 		}
 	}()
-	if env("START_ON_BOOT", "true") == "true" {
+	if utils.Getenv("START_ON_BOOT", "true") == "true" {
 		s.start()
 	}
 	select {}

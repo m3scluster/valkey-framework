@@ -194,6 +194,13 @@ func (s *Scheduler) restoreState(b []byte) bool {
 		return false
 	}
 	s.frameworkID = v.FrameworkID
+	if s.framework != nil {
+		if v.FrameworkID == "" {
+			s.framework.ID = nil
+		} else {
+			s.framework.ID = &lib.FrameworkID{Value: v.FrameworkID}
+		}
+	}
 	s.desired = v.Desired
 	if v.Tasks != nil {
 		s.tasks = v.Tasks

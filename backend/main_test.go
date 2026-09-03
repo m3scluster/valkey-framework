@@ -95,13 +95,16 @@ func TestFrameworkErrorClearsStaleFrameworkID(t *testing.T) {
 }
 
 func TestRestoreStateRestoresFrameworkAndTasks(t *testing.T) {
-	s := &Scheduler{tasks: map[string]*Task{}}
+	s := &Scheduler{tasks: map[string]*Task{}, framework: &lib.FrameworkInfo{}}
 	b := []byte(`{"framework_id":"framework-redis","desired":true,"tasks":{"master-1":{"ID":"master-1","Role":"master","State":"TASK_RUNNING","Updated":"2026-01-01T00:00:00Z"}}}`)
 	if !s.restoreState(b) {
 		t.Fatal("valid persisted state must be restored")
 	}
 	if s.frameworkID != "framework-redis" || !s.desired {
 		t.Fatalf("restored scheduler metadata = (%q, %v)", s.frameworkID, s.desired)
+	}
+	if got := s.framework.GetID().GetValue(); got != "framework-redis" {
+		t.Fatalf("restored FrameworkInfo ID = %q, want framework-redis", got)
 	}
 	want := &Task{ID: "master-1", Role: "master", State: "TASK_RUNNING", Updated: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	if !reflect.DeepEqual(s.tasks["master-1"], want) {

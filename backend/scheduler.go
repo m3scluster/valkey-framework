@@ -292,8 +292,10 @@ func (s *Scheduler) start() {
 	}
 	s.desired = true
 	var ctx context.Context
+	var cancel context.CancelFunc
 	if !s.cfg.DryRun {
-		ctx, s.runCancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancel(context.Background())
+		s.runCancel = cancel
 		s.running = true
 	}
 	s.mu.Unlock()
@@ -301,11 +303,15 @@ func (s *Scheduler) start() {
 	if !s.cfg.DryRun {
 		go func() {
 			defer func() {
+				cancel()
 				s.mu.Lock()
 				s.running = false
 				s.runCancel = nil
 				s.mu.Unlock()
 			}()
+			if s.cfg.ReconcileLoopTime > 0 {
+				go s.reconcileLoop(ctx)
+			}
 			if e := controller.Run(ctx, s.framework, s.caller, controller.WithRegistrationTokens(schedulerRegistrationTokens(ctx)), controller.WithEventHandler(eventHandler{s}), controller.WithFrameworkID(func() string {
 				return s.currentFrameworkID()
 			}), controller.WithSubscriptionTerminated(func(e error) {
@@ -478,4 +484,33 @@ func (s *Scheduler) scaleMasters(ctx context.Context, target int) error {
 	s.mu.Unlock()
 	s.save()
 	return nil
+}
+
+// reconcileLoop periodically asks Mesos for status updates for tracked tasks.
+func (s *Scheduler) reconcileLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.cfg.ReconcileLoopTime)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.mu.Lock()
+			frameworkID := s.frameworkID
+			tasks := make(map[string]string, len(s.tasks))
+			for id, task := range s.tasks {
+				if !isTerminalTaskState(task.State) {
+					tasks[id] = task.Agent
+				}
+			}
+			s.mu.Unlock()
+			if frameworkID == "" {
+				continue
+			}
+			call := calls.Reconcile(calls.ReconcileTasks(tasks)).With(calls.Framework(frameworkID))
+			if err := calls.CallNoData(ctx, s.caller, call); err != nil && ctx.Err() == nil {
+				logrus.WithError(err).Warn("scheduler reconcile failed")
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }

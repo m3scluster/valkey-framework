@@ -417,6 +417,15 @@ func masterIndex(role string) int {
 	return index
 }
 
+// masterQuorum is the majority of the configured masters. A deployment with
+// one master has no majority requirement beyond that single master.
+func masterQuorum(masters int) int {
+	if masters <= 1 {
+		return 1
+	}
+	return masters/2 + 1
+}
+
 func (s *Scheduler) scaleMasters(ctx context.Context, target int) error {
 	s.mu.Lock()
 	if target < minMasters {
@@ -427,12 +436,28 @@ func (s *Scheduler) scaleMasters(ctx context.Context, target int) error {
 	type surplusTask struct {
 		id, agent string
 		index     int
+		running   bool
 	}
 	surplus := make([]surplusTask, 0)
+	runningMasters := 0
 	for _, task := range s.tasks {
 		index := masterIndex(task.Role)
+		if isMasterRole(task.Role) && task.State == "TASK_RUNNING" {
+			runningMasters++
+		}
 		if index > target && index > 0 && !isTerminalTaskState(task.State) {
-			surplus = append(surplus, surplusTask{id: task.ID, agent: task.Agent, index: index})
+			surplus = append(surplus, surplusTask{id: task.ID, agent: task.Agent, index: index, running: task.State == "TASK_RUNNING"})
+		}
+	}
+	if target > 1 && target < s.desiredMasterCount() {
+		for _, task := range surplus {
+			if task.running {
+				runningMasters--
+			}
+		}
+		if runningMasters < masterQuorum(target) {
+			s.mu.Unlock()
+			return fmt.Errorf("master quorum unavailable: need %d running masters, have %d after scaling to %d", masterQuorum(target), runningMasters, target)
 		}
 	}
 	s.mu.Unlock()

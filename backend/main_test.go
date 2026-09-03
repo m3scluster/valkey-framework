@@ -389,6 +389,42 @@ func TestStopKillsSlavesBeforeMastersAndClearsTasks(t *testing.T) {
 	}
 }
 
+func TestScaleDownPreservesMasterQuorum(t *testing.T) {
+	caller := &recordingCaller{}
+	s := &Scheduler{cfg: Config{Name: "test", Masters: 3}, frameworkID: "framework-test", tasks: map[string]*Task{
+		"m1": {ID: "m1", Role: "master-1", State: "TASK_RUNNING", Agent: "agent-1"},
+		"m2": {ID: "m2", Role: "master-2", State: "TASK_RUNNING", Agent: "agent-2"},
+		"m3": {ID: "m3", Role: "master-3", State: "TASK_STAGING", Agent: "agent-3"},
+	}, caller: caller}
+
+	if err := s.scaleMasters(context.Background(), 2); err != nil {
+		t.Fatalf("scaling to a target with quorum available: %v", err)
+	}
+	if s.cfg.Masters != 2 || len(caller.snapshot()) != 1 {
+		t.Fatalf("scaled state = masters=%d kills=%d, want 2 masters and one kill", s.cfg.Masters, len(caller.snapshot()))
+	}
+
+	s = &Scheduler{cfg: Config{Name: "test", Masters: 3}, frameworkID: "framework-test", tasks: map[string]*Task{
+		"m1": {ID: "m1", Role: "master-1", State: "TASK_RUNNING", Agent: "agent-1"},
+		"m2": {ID: "m2", Role: "master-2", State: "TASK_STAGING", Agent: "agent-2"},
+		"m3": {ID: "m3", Role: "master-3", State: "TASK_STAGING", Agent: "agent-3"},
+	}, caller: &recordingCaller{}}
+	if err := s.scaleMasters(context.Background(), 2); err == nil {
+		t.Fatal("scaling must fail when the target would have fewer than two running masters")
+	}
+	if s.cfg.Masters != 3 || len(s.tasks) != 3 {
+		t.Fatalf("failed scale changed state: masters=%d tasks=%d", s.cfg.Masters, len(s.tasks))
+	}
+}
+
+func TestMasterQuorum(t *testing.T) {
+	for masters, want := range map[int]int{0: 1, 1: 1, 2: 2, 3: 2, 4: 3, 5: 3} {
+		if got := masterQuorum(masters); got != want {
+			t.Fatalf("masterQuorum(%d) = %d, want %d", masters, got, want)
+		}
+	}
+}
+
 func TestScaleUpFromLegacyMasterSchedulesSecondMaster(t *testing.T) {
 	s := &Scheduler{cfg: Config{Masters: 2, Slaves: 1}, tasks: map[string]*Task{
 		"legacy": {ID: "legacy", Role: "master", State: "TASK_RUNNING"},

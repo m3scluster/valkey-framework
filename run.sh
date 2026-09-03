@@ -17,4 +17,4 @@ export MESOS_DRY_RUN="${MESOS_DRY_RUN:-false}"
 	go build -o valkey-mesos .
 )
 
-backend/valkey-mesos
+exec backend/valkey-mesos

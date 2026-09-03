@@ -81,12 +81,14 @@ function App() {
 
   const desired = status?.desired ?? false;
   const clusterKnown = status !== null;
-  // The scheduler status is authoritative. Terminal/staged records are not live nodes.
+  // The scheduler status is authoritative. Terminal records are history, not
+  // live nodes or part of the active-node denominator.
+  const liveTasks = desired && status ? Object.values(status.tasks).filter(task => ['TASK_RUNNING', 'TASK_STAGING', 'TASK_STARTING', 'TASK_UNKNOWN'].includes(task.State)) : [];
   const tasks = desired && status ? Object.values(status.tasks).filter(task => task.State === 'TASK_RUNNING') : [];
   const running = tasks.length;
 
   const metricsRunning = desired ? (metrics?.running ?? running) : 0;
-  const metricsTotal = desired ? (metrics?.total ?? Object.keys(status?.tasks ?? {}).length) : 0;
+  const metricsTotal = desired ? (metrics?.total ?? liveTasks.length) : 0;
   const metricsStaging = desired ? (metrics?.staging ?? 0) : 0;
   const metricsFailed = desired ? (metrics?.failed ?? 0) : 0;
 
@@ -118,7 +120,7 @@ function App() {
     <main>
       <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></header>
       {error && <div className="alert" role="alert">⚠ {error}</div>}
-      <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {desired && status ? Object.keys(status.tasks).length : 0}</i></strong><span>active nodes</span></div></section>
+      <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {metricsTotal}</i></strong><span>active nodes</span></div></section>
       <div className="grid">
         <article className="card metric"><span className="label">HEALTH</span><strong>{status ? `${metricsRunning} / ${metricsRunning}` : '—'}</strong><span className="good">● Running Nodes</span></article>
         <article className="card metric"><span className="label">FRAMEWORK ID</span><strong className="compact">{status?.framework_id || 'Not registered'}</strong><span className="muted">scheduler registration</span></article>

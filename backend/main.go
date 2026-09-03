@@ -247,26 +247,39 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 func (s *Scheduler) nextRole() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Check if there is a master in TASK_RUNNING state
+	// A master occupies the singleton slot as soon as it is launched. Waiting
+	// for TASK_RUNNING here would launch one new master for every offer while
+	// the first master is still staging, creating a large history of duplicate
+	// tasks and potentially leaving replicas behind after the master fails.
 	masterRunning := false
+	masterPending := false
 	for _, t := range s.tasks {
-		if t.Role == "master" && t.State == "TASK_RUNNING" {
+		if t.Role != "master" {
+			continue
+		}
+		switch t.State {
+		case "TASK_RUNNING":
 			masterRunning = true
-			break
+		case "TASK_STAGING", "TASK_STARTING", "TASK_UNKNOWN":
+			masterPending = true
 		}
 	}
 
-	// If no master is running yet, return "master" to create a master
-	if !masterRunning {
+	// If no master exists, return "master" to create one. If one is already
+	// pending, decline this offer and wait for its status update instead.
+	if !masterRunning && !masterPending {
 		return "master"
 	}
+	if !masterRunning {
+		return ""
+	}
 
-	// If master is running, check for slave roles
+	// If master is running, check for slave roles - only create slaves if any are missing or inactive
 	for i := 1; i <= s.cfg.Slaves; i++ {
 		r := fmt.Sprintf("slave-%d", i)
 		found := false
 		for _, t := range s.tasks {
-			if t.Role == r && t.State != "TASK_FAILED" && t.State != "TASK_LOST" && t.State != "TASK_STAGING" {
+			if t.Role == r && t.State != "TASK_FAILED" && t.State != "TASK_LOST" && t.State != "TASK_FINISHED" && t.State != "TASK_KILLED" && t.State != "TASK_ERROR" {
 				found = true
 				break
 			}
@@ -452,10 +465,11 @@ func (s *Scheduler) handler() http.Handler {
 		for _, task := range s.tasks {
 			counts[task.State]++
 		}
+		live := counts["TASK_RUNNING"] + counts["TASK_STAGING"] + counts["TASK_STARTING"] + counts["TASK_UNKNOWN"]
 		metrics := map[string]any{
 			"framework_id": s.frameworkID,
 			"desired":      s.desired,
-			"total":        len(s.tasks),
+			"total":        live,
 			"running":      counts["TASK_RUNNING"],
 			"staging":      counts["TASK_STAGING"],
 			"failed":       counts["TASK_FAILED"] + counts["TASK_LOST"],

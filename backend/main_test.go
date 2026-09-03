@@ -153,8 +153,8 @@ func TestMetricsEndpointCountsTaskStates(t *testing.T) {
 	if err := json.Unmarshal(recording.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode metrics: %v", err)
 	}
-	if got.Total != 4 || got.Running != 1 || got.Staging != 1 || got.Failed != 2 {
-		t.Fatalf("metrics = %#v, want total=4 running=1 staging=1 failed=2", got)
+	if got.Total != 2 || got.Running != 1 || got.Staging != 1 || got.Failed != 2 {
+		t.Fatalf("metrics = %#v, want live total=2 running=1 staging=1 failed=2", got)
 	}
 }
 
@@ -200,25 +200,25 @@ func TestNextRole(t *testing.T) {
 		t.Fatalf("Expected \"master\", got %q", next)
 	}
 
-	// Test TASK_STAGING state - should not return slave roles
+	// Test TASK_STAGING state - should wait instead of launching duplicate masters
 	s.tasks["master-1"] = &Task{ID: "master-1", Role: "master", State: "TASK_STAGING"}
 	next = s.nextRole()
-	if next != "master" {
-		t.Fatalf("Expected \"master\" when master is TASK_STAGING, got %q", next)
+	if next != "" {
+		t.Fatalf("Expected no role when master is TASK_STAGING, got %q", next)
 	}
 
-	// Test TASK_STARTING state - should not return slave roles
+	// Test TASK_STARTING state - should wait instead of launching duplicate masters
 	s.tasks["master-1"] = &Task{ID: "master-1", Role: "master", State: "TASK_STARTING"}
 	next = s.nextRole()
-	if next != "master" {
-		t.Fatalf("Expected \"master\" when master is TASK_STARTING, got %q", next)
+	if next != "" {
+		t.Fatalf("Expected no role when master is TASK_STARTING, got %q", next)
 	}
 
-	// Test TASK_UNKNOWN state - should not return slave roles
+	// Test TASK_UNKNOWN state - should wait instead of launching duplicate masters
 	s.tasks["master-1"] = &Task{ID: "master-1", Role: "master", State: "TASK_UNKNOWN"}
 	next = s.nextRole()
-	if next != "master" {
-		t.Fatalf("Expected \"master\" when master is TASK_UNKNOWN, got %q", next)
+	if next != "" {
+		t.Fatalf("Expected no role when master is TASK_UNKNOWN, got %q", next)
 	}
 
 	// Test TASK_RUNNING state - should allow slave creation

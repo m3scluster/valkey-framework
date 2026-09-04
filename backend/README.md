@@ -42,6 +42,7 @@ export MESOS_DOMAIN=mesos
 # Standard ist: master.<MESOS_DOMAIN> (ohne FRAMEWORK_NAME)
 # optional: export VALKEY_MASTER_HOST=master.mesos
 export MESOS_ROLE='*'
+export MESOS_CHECKPOINT=true
 export VALKEY_MASTERS=1
 export VALKEY_SLAVES=2
 export VALKEY_IMAGE=valkey/valkey:8-alpine
@@ -49,6 +50,8 @@ export VALKEY_CPU=0.2
 export VALKEY_MEMORY_MB=256
 ./valkey-mesos-framework
 ```
+
+Checkpointing ist standardmäßig aktiviert und wird mit `MESOS_CHECKPOINT=false` nur für explizite Entwicklungs- oder Kompatibilitätstests abgeschaltet. Dadurch kann Mesos den Framework-Zustand beim Scheduler-Failover wiederherstellen.
 
 `MESOS_TLS_INSECURE=true` ist nur für Entwicklungscluster mit selbstsigniertem Zertifikat vorgesehen. Für Produktion soll der Transport mit einer CA-Datei erweitert bzw. vor einem TLS-terminierenden Proxy betrieben werden.
 

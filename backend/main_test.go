@@ -154,6 +154,39 @@ func TestNewSchedulerSetsFrameworkInfoWebUiURL(t *testing.T) {
 	}
 }
 
+func TestNewSchedulerSetsFrameworkInfoCheckpoint(t *testing.T) {
+	c := Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "weave", Domain: "weave.local", MasterHost: "master.weave.local"}
+	s := NewScheduler(c)
+	if s.framework.Checkpoint == nil {
+		t.Fatal("FrameworkInfo Checkpoint should be set")
+	}
+	if *s.framework.Checkpoint != false {
+		t.Fatalf("FrameworkInfo Checkpoint = %v, want false (explicit Config default)", *s.framework.Checkpoint)
+	}
+
+	// Test explicitly enabled checkpointing
+	c.Checkpoint = true
+	s = NewScheduler(c)
+	if s.framework.Checkpoint == nil {
+		t.Fatal("FrameworkInfo Checkpoint should be set")
+	}
+	if *s.framework.Checkpoint != true {
+		t.Fatalf("FrameworkInfo Checkpoint = %v, want true (explicitly set)", *s.framework.Checkpoint)
+	}
+}
+
+func TestLoadConfigEnablesCheckpointingByDefault(t *testing.T) {
+	t.Setenv("MESOS_CHECKPOINT", "")
+	if got := loadConfig().Checkpoint; !got {
+		t.Fatal("checkpointing should be enabled by default")
+	}
+
+	t.Setenv("MESOS_CHECKPOINT", "false")
+	if got := loadConfig().Checkpoint; got {
+		t.Fatal("MESOS_CHECKPOINT=false should disable checkpointing")
+	}
+}
+
 func TestNewRedisClientUsesRedisConfig(t *testing.T) {
 	client := newRedisClient(Config{
 		Name:          "test",

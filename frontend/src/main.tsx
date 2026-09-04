@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import './style.css';
 
 type Task = { ID: string; Role: string; State: string; Host?: string; Port?: number; Updated?: string };
-type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_masters: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
-type Metrics = { framework_id: string; desired: boolean; total: number; running: number; staging: number; failed: number; valkey?: { available: boolean; error: string; sections: Record<string, Record<string, string | number>> } };
+type Status = { framework_id: string; scheduler_connected: boolean; desired: boolean; masters: number; slaves: number; min_masters: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
+type Metrics = { framework_id: string; scheduler_connected: boolean; desired: boolean; total: number; running: number; staging: number; failed: number; valkey?: { available: boolean; error: string; sections: Record<string, Record<string, string | number>> } };
 type ScaleNotification = { type: 'success' | 'error'; message: string; target?: number };
 type Theme = 'dark' | 'light';
 type View = 'overview' | 'nodes' | 'events';
@@ -122,7 +122,8 @@ function App() {
     }
   }
 
-  const desired = status?.desired ?? false;
+  const schedulerConnected = status?.scheduler_connected ?? false;
+  const desired = schedulerConnected && (status?.desired ?? false);
   const clusterKnown = status !== null;
   // The scheduler status is authoritative. Terminal records are history, not
   // live nodes or part of the active-node denominator.
@@ -211,9 +212,9 @@ function App() {
 
       {status?.warnings?.map((warning, index) => <div className="alert scheduler-warning" role="alert" key={`${warning}-${index}`}>⚠ {warning}</div>)}
       {view === 'overview' && <>
-          <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {metricsTotal}</i></strong><span>active nodes</span></div></section>
+          <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : !schedulerConnected ? 'Unavailable' : desired ? 'Running' : 'Stopped'}</h2><p>{!schedulerConnected && clusterKnown ? 'Scheduler is not connected to Mesos; persisted state is not considered live.' : 'Managed by the Valkey Scheduler on Apache Mesos.'}</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {metricsTotal}</i></strong><span>active nodes</span></div></section>
           <div className="grid">
-            <article className="card metric"><span className="label">HEALTH</span><strong>{status ? `${metricsRunning} / ${metricsRunning}` : '—'}</strong><span className="good">● Running Nodes</span></article>
+            <article className="card metric"><span className="label">HEALTH</span><strong>{status && schedulerConnected ? `${metricsRunning} / ${metricsRunning}` : '—'}</strong><span className={schedulerConnected ? 'good' : 'warning'}>● {schedulerConnected ? 'Mesos Connected' : 'Mesos Disconnected'}</span></article>
             <article className="card metric"><span className="label">FRAMEWORK ID</span><strong className="compact">{status?.framework_id || 'Not registered'}</strong><span className="muted">scheduler registration</span></article>
             <article className="card metric"><span className="label">DESIRED STATE</span><strong>{status ? (desired ? 'ON' : 'OFF') : '—'}</strong><span className="muted">controlled by scheduler</span></article>
           </div>

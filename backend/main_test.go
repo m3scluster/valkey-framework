@@ -327,7 +327,7 @@ cmdstat_get:calls=8,usec=16,usec_per_call=2.00
 # Latencystats
 latency_percentiles_usec_get:p50=1.003,p99=4.015
 `}
-	s := &Scheduler{frameworkID: "framework-1", desired: true, tasks: map[string]*Task{
+	s := &Scheduler{frameworkID: "framework-1", schedulerConnected: true, desired: true, tasks: map[string]*Task{
 		"running": {State: "TASK_RUNNING"},
 	}, metricsReader: reader}
 	reader.duringRead = func() {
@@ -398,7 +398,7 @@ func TestMetricsEndpointDoesNotReadValkeyBeforeNodeStarts(t *testing.T) {
 }
 
 func TestMetricsEndpointCountsTaskStates(t *testing.T) {
-	s := &Scheduler{frameworkID: "framework-1", desired: true, tasks: map[string]*Task{
+	s := &Scheduler{frameworkID: "framework-1", schedulerConnected: true, desired: true, tasks: map[string]*Task{
 		"running": {State: "TASK_RUNNING"},
 		"staging": {State: "TASK_STAGING"},
 		"failed":  {State: "TASK_FAILED"},

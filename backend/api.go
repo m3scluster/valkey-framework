@@ -14,24 +14,27 @@ func (s *Scheduler) handler() http.Handler {
 	m.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "desired": s.desired, "masters": s.desiredMasterCount(), "slaves": s.cfg.Slaves, "min_masters": minMasters, "min_slaves": minSlaves, "warnings": s.warningsLocked(), "tasks": s.tasks})
+		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "scheduler_connected": s.schedulerConnected, "desired": s.desired, "masters": s.desiredMasterCount(), "slaves": s.cfg.Slaves, "min_masters": minMasters, "min_slaves": minSlaves, "warnings": s.warningsLocked(), "tasks": s.tasks})
 	})
 	m.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		counts := map[string]int{}
-		for _, task := range s.tasks {
-			counts[task.State]++
+		if s.schedulerConnected {
+			for _, task := range s.tasks {
+				counts[task.State]++
+			}
 		}
-		frameworkID, desired, reader := s.frameworkID, s.desired, s.metricsReader
+		frameworkID, connected, desired, reader := s.frameworkID, s.schedulerConnected, s.desired, s.metricsReader
 		s.mu.Unlock()
 		live := counts["TASK_RUNNING"] + counts["TASK_STAGING"] + counts["TASK_STARTING"] + counts["TASK_UNKNOWN"]
 		metrics := map[string]any{
-			"framework_id": frameworkID,
-			"desired":      desired,
-			"total":        live,
-			"running":      counts["TASK_RUNNING"],
-			"staging":      counts["TASK_STAGING"],
-			"failed":       counts["TASK_FAILED"] + counts["TASK_LOST"],
+			"framework_id":        frameworkID,
+			"scheduler_connected": connected,
+			"desired":             desired,
+			"total":               live,
+			"running":             counts["TASK_RUNNING"],
+			"staging":             counts["TASK_STAGING"],
+			"failed":              counts["TASK_FAILED"] + counts["TASK_LOST"],
 		}
 		valkey := map[string]any{"available": false, "error": "Valkey nodes are not running", "sections": map[string]map[string]any{}}
 		if reader != nil && counts["TASK_RUNNING"] > 0 {

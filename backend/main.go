@@ -55,19 +55,20 @@ func (r redisInfoReader) Info(ctx context.Context, sections ...string) (string, 
 }
 
 type Scheduler struct {
-	cfg              Config
-	mu               sync.Mutex
-	frameworkID      string
-	desired          bool
-	tasks            map[string]*Task
-	state            *redis.Client
-	caller           calls.Caller
-	framework        *lib.FrameworkInfo
-	runCancel        context.CancelFunc
-	runDone          chan struct{}
-	running          bool
-	resourceShortage bool
-	metricsReader    valkeyMetricsReader
+	cfg                Config
+	mu                 sync.Mutex
+	frameworkID        string
+	schedulerConnected bool
+	desired            bool
+	tasks              map[string]*Task
+	state              *redis.Client
+	caller             calls.Caller
+	framework          *lib.FrameworkInfo
+	runCancel          context.CancelFunc
+	runDone            chan struct{}
+	running            bool
+	resourceShortage   bool
+	metricsReader      valkeyMetricsReader
 }
 
 const programName = "valkey-mesos-framework"
@@ -178,6 +179,12 @@ func (s *Scheduler) currentFrameworkID() string {
 	defer s.mu.Unlock()
 	return s.frameworkID
 }
+func (s *Scheduler) setSchedulerConnected(connected bool) {
+	s.mu.Lock()
+	s.schedulerConnected = connected
+	s.mu.Unlock()
+}
+
 func (s *Scheduler) recordFrameworkID(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

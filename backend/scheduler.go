@@ -198,6 +198,7 @@ func (s *Scheduler) warningsLocked() []string {
 func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 	switch e.GetType() {
 	case scheduler.Event_ERROR:
+		s.setSchedulerConnected(false)
 		// Mesos can invalidate a persisted framework ID. Clear it before the
 		// controller's reconnect so the next SUBSCRIBE registers a new framework.
 		if s.recordFrameworkID("") {
@@ -213,6 +214,7 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 		if frameworkID == "" {
 			return fmt.Errorf("mesos sent an empty framework ID")
 		}
+		s.setSchedulerConnected(true)
 		changed := s.recordFrameworkID(frameworkID)
 		if changed {
 			s.mu.Lock()
@@ -355,6 +357,7 @@ func (s *Scheduler) start() {
 			if e := controller.Run(ctx, s.framework, s.caller, controller.WithRegistrationTokens(schedulerRegistrationTokens(ctx)), controller.WithEventHandler(eventHandler{s}), controller.WithFrameworkID(func() string {
 				return s.currentFrameworkID()
 			}), controller.WithSubscriptionTerminated(func(e error) {
+				s.setSchedulerConnected(false)
 				if e != nil {
 					logrus.WithError(e).Error("scheduler stopped")
 				}

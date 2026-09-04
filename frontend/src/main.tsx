@@ -196,7 +196,9 @@ function App() {
   return <div className="shell" data-theme={theme}>
     <aside>
       <div className="brand"><ValkeyClusterMark /><div><b>VALKEY</b><small>CONTROL PLANE</small></div></div>
-      <nav aria-label="Primary navigation">{([['overview', '◈ Overview'], ['nodes', '◌ Nodes'], ['events', '⌁ Events']] as const).map(([key, label]) => <button key={key} className={view === key ? 'active' : ''} type="button" onClick={() => setView(key)}>{label}</button>)}</nav>
+      <nav aria-label="Primary navigation">
+        {([['overview', '◈ Overview'], ['nodes', '◌ Nodes'], ['events', '⌁ Events']] as const).map(([key, label]) => <a key={key} href={`#${key}`} className={view === key ? 'active' : ''} onClick={(event) => { event.preventDefault(); setView(key); }}>{label}</a>)}
+      </nav>
       <div className="sidefoot"><span className="pulse" /> Mesos connected</div>
     </aside>
     <main>

@@ -296,6 +296,7 @@ func (s *Scheduler) start() {
 	if !s.cfg.DryRun {
 		ctx, cancel = context.WithCancel(context.Background())
 		s.runCancel = cancel
+		s.runDone = make(chan struct{})
 		s.running = true
 	}
 	s.mu.Unlock()
@@ -307,6 +308,8 @@ func (s *Scheduler) start() {
 				s.mu.Lock()
 				s.running = false
 				s.runCancel = nil
+				close(s.runDone)
+				s.runDone = nil
 				s.mu.Unlock()
 			}()
 			if s.cfg.ReconcileLoopTime > 0 {
@@ -358,11 +361,26 @@ func (s *Scheduler) stop() {
 
 	s.mu.Lock()
 	s.tasks = make(map[string]*Task)
+	// Clear both copies of the ID. Clearing only Scheduler.frameworkID leaves
+	// calls.Subscribe with the stale FrameworkInfo.ID, which Mesos rejects as a
+	// mismatch on the next start.
+	s.frameworkID = ""
+	if s.framework != nil {
+		s.framework.ID = nil
+	}
+	done := s.runDone
 	if s.runCancel != nil {
 		s.runCancel()
 		s.runCancel = nil
 	}
 	s.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			logrus.Warn("scheduler stop timed out waiting for subscription shutdown")
+		}
+	}
 	s.save()
 }
 

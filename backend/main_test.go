@@ -432,6 +432,7 @@ func TestStopKillsSlavesBeforeMastersAndClearsTasks(t *testing.T) {
 		cfg:         Config{Name: "test"},
 		desired:     true,
 		frameworkID: "framework-test",
+		framework:   &lib.FrameworkInfo{ID: &lib.FrameworkID{Value: "framework-test"}},
 		tasks: map[string]*Task{
 			"master-task":  {ID: "master-task", Role: "master", State: "TASK_RUNNING", Agent: "agent-master"},
 			"slave-2-task": {ID: "slave-2-task", Role: "slave-2", State: "TASK_RUNNING", Agent: "agent-2"},
@@ -463,6 +464,9 @@ func TestStopKillsSlavesBeforeMastersAndClearsTasks(t *testing.T) {
 	}
 	if s.desired || len(s.tasks) != 0 {
 		t.Fatalf("scheduler after stop = desired=%v tasks=%v, want false and no tasks", s.desired, s.tasks)
+	}
+	if s.frameworkID != "" || s.framework.GetID() != nil {
+		t.Fatalf("scheduler framework identity after stop = (%q, %#v), want empty and nil", s.frameworkID, s.framework.GetID())
 	}
 }
 

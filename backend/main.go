@@ -64,6 +64,7 @@ type Scheduler struct {
 	caller           calls.Caller
 	framework        *lib.FrameworkInfo
 	runCancel        context.CancelFunc
+	runDone          chan struct{}
 	running          bool
 	resourceShortage bool
 	metricsReader    valkeyMetricsReader

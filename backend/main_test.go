@@ -170,8 +170,8 @@ func TestLoadConfigUsesRedisDefaults(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	c := loadConfig()
-	if c.RedisServer != "127.0.0.1:6379" || c.RedisPassword != "" || c.RedisDB != 1 || c.RedisPoolSize != 0 {
-		t.Fatalf("Redis config defaults = (%q, %q, %d, %d), want (127.0.0.1:6379, empty, 1, 0)", c.RedisServer, c.RedisPassword, c.RedisDB, c.RedisPoolSize)
+	if c.RedisServer != "redis.weave.local:6379" || c.RedisPassword != "" || c.RedisDB != 10 || c.RedisPoolSize != 0 {
+		t.Fatalf("Redis config defaults = (%q, %q, %d, %d), want (redis.weave.local:6379, empty, 10, 0)", c.RedisServer, c.RedisPassword, c.RedisDB, c.RedisPoolSize)
 	}
 }
 
@@ -295,10 +295,12 @@ type fakeValkeyMetricsReader struct {
 	info       string
 	err        error
 	sections   []string
+	reads      int
 	duringRead func()
 }
 
 func (f *fakeValkeyMetricsReader) Info(_ context.Context, sections ...string) (string, error) {
+	f.reads++
 	f.sections = append([]string(nil), sections...)
 	if f.duringRead != nil {
 		f.duringRead()
@@ -368,6 +370,30 @@ latency_percentiles_usec_get:p50=1.003,p99=4.015
 		if got.Valkey.Sections[section] == nil {
 			t.Fatalf("missing section %q in %#v", section, got.Valkey.Sections)
 		}
+	}
+}
+
+func TestMetricsEndpointDoesNotReadValkeyBeforeNodeStarts(t *testing.T) {
+	reader := &fakeValkeyMetricsReader{}
+	s := &Scheduler{desired: true, tasks: map[string]*Task{}, metricsReader: reader}
+
+	recording := httptest.NewRecorder()
+	s.handler().ServeHTTP(recording, httptest.NewRequest("GET", "/api/metrics", nil))
+
+	if reader.reads != 0 {
+		t.Fatalf("Valkey INFO reads before a node starts = %d, want 0", reader.reads)
+	}
+	var got struct {
+		Valkey struct {
+			Available bool   `json:"available"`
+			Error     string `json:"error"`
+		} `json:"valkey"`
+	}
+	if err := json.Unmarshal(recording.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	if got.Valkey.Available || got.Valkey.Error != "Valkey nodes are not running" {
+		t.Fatalf("metrics before node start = %#v, want unavailable without an INFO read", got.Valkey)
 	}
 }
 

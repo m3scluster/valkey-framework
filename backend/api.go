@@ -33,8 +33,8 @@ func (s *Scheduler) handler() http.Handler {
 			"staging":      counts["TASK_STAGING"],
 			"failed":       counts["TASK_FAILED"] + counts["TASK_LOST"],
 		}
-		valkey := map[string]any{"available": false, "error": "Valkey metrics reader is not configured", "sections": map[string]map[string]any{}}
-		if reader != nil {
+		valkey := map[string]any{"available": false, "error": "Valkey nodes are not running", "sections": map[string]map[string]any{}}
+		if reader != nil && counts["TASK_RUNNING"] > 0 {
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 			raw, err := reader.Info(ctx, valkeyInfoSections...)
 			cancel()

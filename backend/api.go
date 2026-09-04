@@ -24,6 +24,18 @@ type mesosTaskStatistics struct {
 	} `json:"statistics"`
 }
 
+func taskStatisticsUsage(item mesosTaskStatistics) map[string]any {
+	usage := map[string]any{
+		"usage_available": true,
+		"usage_cpu_cores": item.Statistics.CPUsLimit,
+		"usage_memory_mb": item.Statistics.MemRSSBytes / (1024 * 1024),
+	}
+	if item.Statistics.DiskUsedBytes > 0 {
+		usage["usage_disk_mb"] = item.Statistics.DiskUsedBytes / (1024 * 1024)
+	}
+	return usage
+}
+
 func (s *Scheduler) taskUsage(ctx context.Context, task *Task, frameworkID string) (map[string]any, error) {
 	if task.AgentURL == "" || s.mesosHTTPClient == nil {
 		return nil, fmt.Errorf("Mesos agent URL is unavailable")
@@ -47,18 +59,26 @@ func (s *Scheduler) taskUsage(ctx context.Context, task *Task, frameworkID strin
 	if err := json.NewDecoder(response.Body).Decode(&statistics); err != nil {
 		return nil, err
 	}
-	for _, item := range statistics {
+	var frameworkMatch *mesosTaskStatistics
+	frameworkMatches := 0
+	for index := range statistics {
+		item := &statistics[index]
 		if item.FrameworkID != "" && frameworkID != "" && item.FrameworkID != frameworkID {
 			continue
 		}
-		if item.Source != task.ID && item.ExecutorID != task.ID {
-			continue
+		if item.Source == task.ID || item.ExecutorID == task.ID {
+			return taskStatisticsUsage(*item), nil
 		}
-		usage := map[string]any{"usage_available": true, "usage_cpu_cores": item.Statistics.CPUsLimit, "usage_memory_mb": item.Statistics.MemRSSBytes / (1024 * 1024)}
-		if item.Statistics.DiskUsedBytes > 0 {
-			usage["usage_disk_mb"] = item.Statistics.DiskUsedBytes / (1024 * 1024)
+		// Mesos reports executor/container statistics, not task statistics.
+		// Command tasks can therefore have an executor ID different from the
+		// task ID. A unique record for this framework is a safe fallback.
+		if frameworkID != "" && item.FrameworkID == frameworkID {
+			frameworkMatch = item
+			frameworkMatches++
 		}
-		return usage, nil
+	}
+	if frameworkMatches == 1 {
+		return taskStatisticsUsage(*frameworkMatch), nil
 	}
 	return nil, fmt.Errorf("no statistics found for task %s", task.ID)
 }

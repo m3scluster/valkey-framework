@@ -793,3 +793,29 @@ func TestTaskUsageReadsMesosAgentStatistics(t *testing.T) {
 		t.Fatalf("usage = %#v", usage)
 	}
 }
+
+func TestTaskUsageFallsBackToUniqueFrameworkExecutorStatistics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"executor_id":"command","source":"command","framework_id":"framework-1","statistics":{"cpus_limit":0.2,"mem_rss_bytes":5242880}}]`))
+	}))
+	defer server.Close()
+	s := &Scheduler{mesosHTTPClient: server.Client()}
+	usage, err := s.taskUsage(context.Background(), &Task{ID: "task-1", AgentURL: server.URL}, "framework-1")
+	if err != nil {
+		t.Fatalf("taskUsage fallback: %v", err)
+	}
+	if usage["usage_available"] != true || usage["usage_cpu_cores"] != 0.2 || usage["usage_memory_mb"] != 5.0 {
+		t.Fatalf("fallback usage = %#v", usage)
+	}
+}
+
+func TestTaskUsageDoesNotUseAmbiguousFrameworkStatistics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"executor_id":"command-1","framework_id":"framework-1","statistics":{"cpus_limit":0.2}},{"executor_id":"command-2","framework_id":"framework-1","statistics":{"cpus_limit":0.3}}]`))
+	}))
+	defer server.Close()
+	s := &Scheduler{mesosHTTPClient: server.Client()}
+	if _, err := s.taskUsage(context.Background(), &Task{ID: "task-1", AgentURL: server.URL}, "framework-1"); err == nil {
+		t.Fatal("ambiguous executor statistics must not be attributed to a task")
+	}
+}

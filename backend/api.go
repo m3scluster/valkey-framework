@@ -14,7 +14,7 @@ func (s *Scheduler) handler() http.Handler {
 	m.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "scheduler_connected": s.schedulerConnected, "desired": s.desired, "masters": s.desiredMasterCount(), "slaves": s.cfg.Slaves, "min_masters": minMasters, "min_slaves": minSlaves, "warnings": s.warningsLocked(), "tasks": s.tasks})
+		_ = json.NewEncoder(w).Encode(map[string]any{"framework_id": s.frameworkID, "scheduler_connected": s.schedulerConnected, "desired": s.desired, "masters": s.desiredMasterCount(), "slaves": s.cfg.Slaves, "min_masters": minMasters, "min_slaves": minSlaves, "resource_limits": map[string]float64{"cpus": s.cfg.CPU, "memory_mb": s.cfg.Memory, "disk_mb": s.cfg.Disk}, "warnings": s.warningsLocked(), "tasks": s.tasks})
 	})
 	m.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -27,6 +27,16 @@ func (s *Scheduler) handler() http.Handler {
 		frameworkID, connected, desired, reader := s.frameworkID, s.schedulerConnected, s.desired, s.metricsReader
 		s.mu.Unlock()
 		live := counts["TASK_RUNNING"] + counts["TASK_STAGING"] + counts["TASK_STARTING"] + counts["TASK_UNKNOWN"]
+		nodeMetrics := make(map[string]any)
+		if connected {
+			s.mu.Lock()
+			for id, task := range s.tasks {
+				if !isTerminalTaskState(task.State) {
+					nodeMetrics[id] = map[string]any{"allocated_cpu": task.CPU, "allocated_memory_mb": task.Memory, "allocated_disk_mb": task.Disk, "usage_available": false, "usage_error": "Mesos TaskStatus does not expose container resource usage"}
+				}
+			}
+			s.mu.Unlock()
+		}
 		metrics := map[string]any{
 			"framework_id":        frameworkID,
 			"scheduler_connected": connected,
@@ -35,6 +45,7 @@ func (s *Scheduler) handler() http.Handler {
 			"running":             counts["TASK_RUNNING"],
 			"staging":             counts["TASK_STAGING"],
 			"failed":              counts["TASK_FAILED"] + counts["TASK_LOST"],
+			"nodes":               nodeMetrics,
 		}
 		valkey := map[string]any{"available": false, "error": "Valkey nodes are not running", "sections": map[string]map[string]any{}}
 		if reader != nil && counts["TASK_RUNNING"] > 0 {

@@ -753,3 +753,25 @@ func TestLoadConfigReadsValkeyAuthentication(t *testing.T) {
 		t.Fatalf("Valkey auth config = (%q, %q)", c.ValkeyPassword, c.ValkeyReplicationPassword)
 	}
 }
+
+func TestBuildTaskInfoIncludesConfiguredDiskResource(t *testing.T) {
+	s := &Scheduler{cfg: Config{Image: "valkey:test", CPU: .2, Memory: 128, Disk: 512, Port: 6379}, tasks: map[string]*Task{}}
+	task := s.buildTaskInfo("master", "task-1", lib.Offer{})
+	if len(task.Resources) != 3 || task.Resources[2].GetName() != "disk" || task.Resources[2].GetScalar().GetValue() != 512 {
+		t.Fatalf("resources = %#v, want cpu/mem/disk=512", task.Resources)
+	}
+	if s.checkOfferResources(lib.Offer{Resources: []lib.Resource{scalar("cpus", 1), scalar("mem", 256), scalar("disk", 511)}}) {
+		t.Fatal("offer with insufficient disk must be rejected")
+	}
+	if !s.checkOfferResources(lib.Offer{Resources: []lib.Resource{scalar("cpus", 1), scalar("mem", 256), scalar("disk", 512)}}) {
+		t.Fatal("offer with sufficient disk must be accepted")
+	}
+}
+
+func TestBuildTaskInfoOmitsDiskResourceWhenUnset(t *testing.T) {
+	s := NewScheduler(Config{Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379})
+	task := s.buildTaskInfo("master", "task-1", lib.Offer{})
+	if len(task.Resources) != 2 {
+		t.Fatalf("resources = %#v, want only cpu and mem", task.Resources)
+	}
+}

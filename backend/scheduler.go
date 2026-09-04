@@ -54,7 +54,11 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 		driver := s.cfg.ValkeyVolumeDriver
 		container.Volumes = []lib.Volume{{Mode: func() *lib.Volume_Mode { mode := lib.Volume_RW; return &mode }(), ContainerPath: s.cfg.ValkeyVolumePath, Source: &lib.Volume_Source{Type: lib.Volume_Source_DOCKER_VOLUME, DockerVolume: &lib.Volume_Source_DockerVolume{Driver: &driver, Name: s.cfg.ValkeyVolumeName}}}}
 	}
-	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: container}
+	resources := []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}
+	if s.cfg.Disk > 0 {
+		resources = append(resources, scalar("disk", s.cfg.Disk))
+	}
+	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: resources, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: container}
 }
 func isMasterRole(role string) bool {
 	return role == "master" || strings.HasPrefix(role, "master-")
@@ -154,6 +158,7 @@ func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
 	// Find actual CPU and Memory in the offer's resources
 	actualCPU := 0.0
 	actualMem := 0.0
+	actualDisk := 0.0
 
 	for _, resource := range o.Resources {
 		switch resource.GetName() {
@@ -161,11 +166,13 @@ func (s *Scheduler) checkOfferResources(o lib.Offer) bool {
 			actualCPU += resource.GetScalar().GetValue()
 		case "mem":
 			actualMem += resource.GetScalar().GetValue()
+		case "disk":
+			actualDisk += resource.GetScalar().GetValue()
 		}
 	}
 
 	// Check if offer has sufficient CPU and Memory
-	if actualCPU < requiredCPU || actualMem < requiredMem {
+	if actualCPU < requiredCPU || actualMem < requiredMem || actualDisk < s.cfg.Disk {
 		return false
 	}
 
@@ -273,7 +280,7 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 			if err == nil {
 				s.mu.Lock()
 				s.resourceShortage = false
-				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, Port: s.cfg.Port, Updated: time.Now()}
+				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, Port: s.cfg.Port, CPU: s.cfg.CPU, Memory: s.cfg.Memory, Disk: s.cfg.Disk, Updated: time.Now()}
 				s.mu.Unlock()
 				s.save()
 			}

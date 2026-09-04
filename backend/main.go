@@ -28,7 +28,7 @@ type Config struct {
 	ValkeyVolumeDriver, ValkeyVolumeName, ValkeyVolumePath                                                                                     string
 	Password, RedisPassword, ValkeyPassword, ValkeyReplicationPassword                                                                         string
 	RedisDB, Masters, Slaves, RedisPoolSize                                                                                                    int
-	CPU, Memory                                                                                                                                float64
+	CPU, Memory, Disk                                                                                                                          float64
 	Port                                                                                                                                       int
 	DryRun, InsecureTLS, Checkpoint                                                                                                            bool
 	ReconcileLoopTime                                                                                                                          time.Duration
@@ -42,6 +42,7 @@ const minMasters = 1
 type Task struct {
 	ID, Role, State, Agent, Host string
 	Port                         int
+	CPU, Memory, Disk            float64
 	Updated                      time.Time
 }
 
@@ -127,7 +128,7 @@ func loadConfig() Config {
 	port := atoi("VALKEY_PORT", 6379)
 	metricsAddr := utils.Getenv("VALKEY_METRICS_ADDR", net.JoinHostPort(masterHost, strconv.Itoa(port)))
 	reconcileLoopTime, _ := time.ParseDuration(utils.Getenv("RECONCILE_WAIT", "30m"))
-	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), ValkeyPassword: utils.Getenv("VALKEY_PASSWORD", ""), ValkeyReplicationPassword: utils.Getenv("VALKEY_REPLICATION_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 10), RedisPoolSize: atoi("REDIS_POOLSIZE", 0), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), ValkeyVolumeDriver: utils.Getenv("VALKEY_VOLUME_DRIVER", ""), ValkeyVolumeName: utils.Getenv("VALKEY_VOLUME_NAME", ""), ValkeyVolumePath: utils.Getenv("VALKEY_VOLUME_PATH", "/data"), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true", Checkpoint: utils.Getenv("MESOS_CHECKPOINT", "true") == "true", SSLKeyBase64: utils.Getenv("SSL_KEY_BASE64", ""), SSLCertBase64: utils.Getenv("SSL_CRT_BASE64", ""), ReconcileLoopTime: reconcileLoopTime, FrontendURL: utils.Getenv("FRONTEND_URL", "http://localhost:5173")}
+	return Config{Master: master, Image: utils.Getenv("VALKEY_IMAGE", "valkey/valkey:8-alpine"), Role: utils.Getenv("MESOS_ROLE", "*"), Name: name, User: utils.Getenv("FRAMEWORK_USER", utils.Getenv("USER", "root")), Password: utils.Getenv("MESOS_PASSWORD", ""), RedisServer: utils.Getenv("REDIS_SERVER", "redis.weave.local:6379"), ValkeyMetricsAddr: metricsAddr, RedisPassword: utils.Getenv("REDIS_PASSWORD", ""), ValkeyPassword: utils.Getenv("VALKEY_PASSWORD", ""), ValkeyReplicationPassword: utils.Getenv("VALKEY_REPLICATION_PASSWORD", ""), RedisDB: atoi("REDIS_DB", 10), RedisPoolSize: atoi("REDIS_POOLSIZE", 0), CNI: cni, Domain: domain, MasterHost: utils.Getenv("VALKEY_MASTER_HOST", masterHost), ValkeyVolumeDriver: utils.Getenv("VALKEY_VOLUME_DRIVER", ""), ValkeyVolumeName: utils.Getenv("VALKEY_VOLUME_NAME", ""), ValkeyVolumePath: utils.Getenv("VALKEY_VOLUME_PATH", "/data"), Masters: masters, Slaves: slaves, CPU: floatEnv("VALKEY_CPU", .2), Memory: floatEnv("VALKEY_MEMORY_MB", 256), Disk: floatEnv("VALKEY_DISK_MB", 0), Port: port, Listen: utils.Getenv("LISTEN_ADDR", "0.0.0.0:10001"), DryRun: utils.Getenv("MESOS_DRY_RUN", "false") == "true", InsecureTLS: utils.Getenv("MESOS_TLS_INSECURE", "false") == "true", Checkpoint: utils.Getenv("MESOS_CHECKPOINT", "true") == "true", SSLKeyBase64: utils.Getenv("SSL_KEY_BASE64", ""), SSLCertBase64: utils.Getenv("SSL_CRT_BASE64", ""), ReconcileLoopTime: reconcileLoopTime, FrontendURL: utils.Getenv("FRONTEND_URL", "http://localhost:5173")}
 }
 func floatEnv(k string, d float64) float64 {
 	v, e := strconv.ParseFloat(utils.Getenv(k, strconv.FormatFloat(d, 'f', -1, 64)), 64)

@@ -18,3 +18,9 @@ The project consists of two main components:
 2. `frontend/` - React/Vite administration interface with live polling capabilities
 
 This framework allows for seamless deployment and management of Valkey instances within a Mesos environment while maintaining the ability to test configurations locally through dry-run mode.
+
+## Dashboard preview
+
+The administration frontend presents cluster health, active nodes, framework state, and Valkey server metrics in one overview.
+
+![Valkey Control Plane dashboard overview](assets/dashboard.svg)

@@ -7,13 +7,15 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"valkey-mesos-framework/utils"
 )
 
 type mesosTaskStatistics struct {
-	ExecutorID string `json:"executor_id"`
-	Source     string `json:"source"`
+	ExecutorID  string `json:"executor_id"`
+	Source      string `json:"source"`
 	FrameworkID string `json:"framework_id"`
-	Statistics struct {
+	Statistics  struct {
 		CPUsLimit          float64 `json:"cpus_limit"`
 		CPUsUserTimeSecs   float64 `json:"cpus_user_time_secs"`
 		CPUsSystemTimeSecs float64 `json:"cpus_system_time_secs"`
@@ -27,18 +29,35 @@ func (s *Scheduler) taskUsage(ctx context.Context, task *Task, frameworkID strin
 		return nil, fmt.Errorf("Mesos agent URL is unavailable")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(task.AgentURL, "/")+"/monitor/statistics", nil)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
+	if username := utils.Getenv("MESOS_USERNAME", ""); username != "" && s.cfg.Password != "" {
+		request.SetBasicAuth(username, s.cfg.Password)
+	}
 	response, err := s.mesosHTTPClient.Do(request)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK { return nil, fmt.Errorf("Mesos agent returned HTTP %s", response.Status) }
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Mesos agent returned HTTP %s", response.Status)
+	}
 	var statistics []mesosTaskStatistics
-	if err := json.NewDecoder(response.Body).Decode(&statistics); err != nil { return nil, err }
+	if err := json.NewDecoder(response.Body).Decode(&statistics); err != nil {
+		return nil, err
+	}
 	for _, item := range statistics {
-		if item.FrameworkID != "" && frameworkID != "" && item.FrameworkID != frameworkID { continue }
-		if item.Source != task.ID && item.ExecutorID != task.ID { continue }
+		if item.FrameworkID != "" && frameworkID != "" && item.FrameworkID != frameworkID {
+			continue
+		}
+		if item.Source != task.ID && item.ExecutorID != task.ID {
+			continue
+		}
 		usage := map[string]any{"usage_available": true, "usage_cpu_cores": item.Statistics.CPUsLimit, "usage_memory_mb": item.Statistics.MemRSSBytes / (1024 * 1024)}
-		if item.Statistics.DiskUsedBytes > 0 { usage["usage_disk_mb"] = item.Statistics.DiskUsedBytes / (1024 * 1024) }
+		if item.Statistics.DiskUsedBytes > 0 {
+			usage["usage_disk_mb"] = item.Statistics.DiskUsedBytes / (1024 * 1024)
+		}
 		return usage, nil
 	}
 	return nil, fmt.Errorf("no statistics found for task %s", task.ID)
@@ -67,7 +86,7 @@ func (s *Scheduler) handler() http.Handler {
 		if connected {
 			s.mu.Lock()
 			tasks := make([]*Task, 0, len(s.tasks))
-			for id, task := range s.tasks {
+			for _, task := range s.tasks {
 				if !isTerminalTaskState(task.State) {
 					tasks = append(tasks, task)
 				}
@@ -77,8 +96,12 @@ func (s *Scheduler) handler() http.Handler {
 				metric := map[string]any{"allocated_cpu": task.CPU, "allocated_memory_mb": task.Memory, "allocated_disk_mb": task.Disk, "usage_available": false, "usage_error": "Mesos agent statistics unavailable"}
 				if client != nil {
 					if usage, err := s.taskUsage(r.Context(), task, frameworkID); err == nil {
-						for key, value := range usage { metric[key] = value }
-					} else { metric["usage_error"] = err.Error() }
+						for key, value := range usage {
+							metric[key] = value
+						}
+					} else {
+						metric["usage_error"] = err.Error()
+					}
 				}
 				nodeMetrics[task.ID] = metric
 			}

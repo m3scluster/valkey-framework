@@ -41,9 +41,9 @@ const minMasters = 1
 
 type Task struct {
 	ID, Role, State, Agent, Host, AgentURL string
-	Port                         int
-	CPU, Memory, Disk            float64
-	Updated                      time.Time
+	Port                                   int
+	CPU, Memory, Disk                      float64
+	Updated                                time.Time
 }
 
 type valkeyMetricsReader interface {

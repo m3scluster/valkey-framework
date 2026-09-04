@@ -775,3 +775,21 @@ func TestBuildTaskInfoOmitsDiskResourceWhenUnset(t *testing.T) {
 		t.Fatalf("resources = %#v, want only cpu and mem", task.Resources)
 	}
 }
+
+func TestTaskUsageReadsMesosAgentStatistics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/monitor/statistics" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[{"executor_id":"task-1","framework_id":"framework-1","statistics":{"cpus_limit":0.2,"mem_rss_bytes":10485760,"disk_space_used_bytes":2097152}}]`))
+	}))
+	defer server.Close()
+	s := &Scheduler{mesosHTTPClient: server.Client()}
+	usage, err := s.taskUsage(context.Background(), &Task{ID: "task-1", AgentURL: server.URL}, "framework-1")
+	if err != nil {
+		t.Fatalf("taskUsage: %v", err)
+	}
+	if usage["usage_available"] != true || usage["usage_cpu_cores"] != 0.2 || usage["usage_memory_mb"] != 10.0 || usage["usage_disk_mb"] != 2.0 {
+		t.Fatalf("usage = %#v", usage)
+	}
+}

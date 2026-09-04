@@ -280,7 +280,11 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 			if err == nil {
 				s.mu.Lock()
 				s.resourceShortage = false
-				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, Port: s.cfg.Port, CPU: s.cfg.CPU, Memory: s.cfg.Memory, Disk: s.cfg.Disk, Updated: time.Now()}
+				agentURL := ""
+				if o.URL != nil {
+					agentURL = fmt.Sprintf("%s://%s:%d", o.URL.Scheme, o.URL.Address.GetHostname(), o.URL.Address.GetPort())
+				}
+				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, AgentURL: agentURL, Port: s.cfg.Port, CPU: s.cfg.CPU, Memory: s.cfg.Memory, Disk: s.cfg.Disk, Updated: time.Now()}
 				s.mu.Unlock()
 				s.save()
 			}

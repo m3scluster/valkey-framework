@@ -40,7 +40,7 @@ const minSlaves = 1
 const minMasters = 1
 
 type Task struct {
-	ID, Role, State, Agent, Host string
+	ID, Role, State, Agent, Host, AgentURL string
 	Port                         int
 	CPU, Memory, Disk            float64
 	Updated                      time.Time
@@ -71,6 +71,7 @@ type Scheduler struct {
 	running            bool
 	resourceShortage   bool
 	metricsReader      valkeyMetricsReader
+	mesosHTTPClient    *http.Client
 }
 
 const programName = "valkey-mesos-framework"
@@ -169,6 +170,11 @@ func NewScheduler(c Config) *Scheduler {
 		framework.WebUiURL = &c.FrontendURL
 	}
 	s := &Scheduler{cfg: c, tasks: map[string]*Task{}, state: newRedisClient(c), caller: httpsched.NewCaller(cli), framework: framework}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if c.InsecureTLS {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	s.mesosHTTPClient = &http.Client{Transport: transport, Timeout: 3 * time.Second}
 	s.metricsReader = redisInfoReader{client: redis.NewClient(&redis.Options{Addr: c.ValkeyMetricsAddr})}
 	s.load()
 	return s

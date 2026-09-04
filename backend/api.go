@@ -5,8 +5,44 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
+
+type mesosTaskStatistics struct {
+	ExecutorID string `json:"executor_id"`
+	Source     string `json:"source"`
+	FrameworkID string `json:"framework_id"`
+	Statistics struct {
+		CPUsLimit          float64 `json:"cpus_limit"`
+		CPUsUserTimeSecs   float64 `json:"cpus_user_time_secs"`
+		CPUsSystemTimeSecs float64 `json:"cpus_system_time_secs"`
+		MemRSSBytes        float64 `json:"mem_rss_bytes"`
+		DiskUsedBytes      float64 `json:"disk_space_used_bytes"`
+	} `json:"statistics"`
+}
+
+func (s *Scheduler) taskUsage(ctx context.Context, task *Task, frameworkID string) (map[string]any, error) {
+	if task.AgentURL == "" || s.mesosHTTPClient == nil {
+		return nil, fmt.Errorf("Mesos agent URL is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(task.AgentURL, "/")+"/monitor/statistics", nil)
+	if err != nil { return nil, err }
+	response, err := s.mesosHTTPClient.Do(request)
+	if err != nil { return nil, err }
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK { return nil, fmt.Errorf("Mesos agent returned HTTP %s", response.Status) }
+	var statistics []mesosTaskStatistics
+	if err := json.NewDecoder(response.Body).Decode(&statistics); err != nil { return nil, err }
+	for _, item := range statistics {
+		if item.FrameworkID != "" && frameworkID != "" && item.FrameworkID != frameworkID { continue }
+		if item.Source != task.ID && item.ExecutorID != task.ID { continue }
+		usage := map[string]any{"usage_available": true, "usage_cpu_cores": item.Statistics.CPUsLimit, "usage_memory_mb": item.Statistics.MemRSSBytes / (1024 * 1024)}
+		if item.Statistics.DiskUsedBytes > 0 { usage["usage_disk_mb"] = item.Statistics.DiskUsedBytes / (1024 * 1024) }
+		return usage, nil
+	}
+	return nil, fmt.Errorf("no statistics found for task %s", task.ID)
+}
 
 func (s *Scheduler) handler() http.Handler {
 	m := http.NewServeMux()
@@ -24,18 +60,28 @@ func (s *Scheduler) handler() http.Handler {
 				counts[task.State]++
 			}
 		}
-		frameworkID, connected, desired, reader := s.frameworkID, s.schedulerConnected, s.desired, s.metricsReader
+		frameworkID, connected, desired, reader, client := s.frameworkID, s.schedulerConnected, s.desired, s.metricsReader, s.mesosHTTPClient
 		s.mu.Unlock()
 		live := counts["TASK_RUNNING"] + counts["TASK_STAGING"] + counts["TASK_STARTING"] + counts["TASK_UNKNOWN"]
 		nodeMetrics := make(map[string]any)
 		if connected {
 			s.mu.Lock()
+			tasks := make([]*Task, 0, len(s.tasks))
 			for id, task := range s.tasks {
 				if !isTerminalTaskState(task.State) {
-					nodeMetrics[id] = map[string]any{"allocated_cpu": task.CPU, "allocated_memory_mb": task.Memory, "allocated_disk_mb": task.Disk, "usage_available": false, "usage_error": "Mesos TaskStatus does not expose container resource usage"}
+					tasks = append(tasks, task)
 				}
 			}
 			s.mu.Unlock()
+			for _, task := range tasks {
+				metric := map[string]any{"allocated_cpu": task.CPU, "allocated_memory_mb": task.Memory, "allocated_disk_mb": task.Disk, "usage_available": false, "usage_error": "Mesos agent statistics unavailable"}
+				if client != nil {
+					if usage, err := s.taskUsage(r.Context(), task, frameworkID); err == nil {
+						for key, value := range usage { metric[key] = value }
+					} else { metric["usage_error"] = err.Error() }
+				}
+				nodeMetrics[task.ID] = metric
+			}
 		}
 		metrics := map[string]any{
 			"framework_id":        frameworkID,

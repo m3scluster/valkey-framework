@@ -48,6 +48,10 @@ export VALKEY_SLAVES=2
 export VALKEY_IMAGE=valkey/valkey:8-alpine
 export VALKEY_CPU=0.2
 export VALKEY_MEMORY_MB=256
+# optional persistent Docker volume (requires the Mesos docker/volume isolator)
+export VALKEY_VOLUME_DRIVER=local
+export VALKEY_VOLUME_NAME=valkey-data
+export VALKEY_VOLUME_PATH=/data
 ./valkey-mesos-framework
 ```
 

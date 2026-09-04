@@ -43,7 +43,12 @@ func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	if s.cfg.Domain != "" {
 		hostname += "." + strings.Trim(s.cfg.Domain, ".")
 	}
-	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: &lib.ContainerInfo{Type: &typ, Hostname: &hostname, Docker: &lib.ContainerInfo_DockerInfo{Image: image, Network: &dockerNetwork}, NetworkInfos: networkInfos}}
+	container := &lib.ContainerInfo{Type: &typ, Hostname: &hostname, Docker: &lib.ContainerInfo_DockerInfo{Image: image, Network: &dockerNetwork}, NetworkInfos: networkInfos}
+	if s.cfg.ValkeyVolumeName != "" {
+		driver := s.cfg.ValkeyVolumeDriver
+		container.Volumes = []lib.Volume{{Mode: func() *lib.Volume_Mode { mode := lib.Volume_RW; return &mode }(), ContainerPath: s.cfg.ValkeyVolumePath, Source: &lib.Volume_Source{Type: lib.Volume_Source_DOCKER_VOLUME, DockerVolume: &lib.Volume_Source_DockerVolume{Driver: &driver, Name: s.cfg.ValkeyVolumeName}}}}
+	}
+	return lib.TaskInfo{Name: taskName, TaskID: lib.TaskID{Value: id}, AgentID: o.AgentID, Resources: []lib.Resource{scalar("cpus", s.cfg.CPU), scalar("mem", s.cfg.Memory)}, Command: &lib.CommandInfo{Shell: &shell, Value: &cmd}, Container: container}
 }
 func isMasterRole(role string) bool {
 	return role == "master" || strings.HasPrefix(role, "master-")

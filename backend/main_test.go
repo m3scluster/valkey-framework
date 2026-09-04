@@ -681,3 +681,36 @@ func TestStatusIncludesWarningsForResourceShortageAndFailedRole(t *testing.T) {
 		t.Fatalf("warnings = %#v, want resource and failed master warnings", got.Warnings)
 	}
 }
+
+func TestBuildTaskInfoAddsConfiguredDockerVolume(t *testing.T) {
+	s := NewScheduler(Config{Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, ValkeyVolumeDriver: "convoy", ValkeyVolumeName: "valkey-data", ValkeyVolumePath: "/var/lib/valkey"})
+	task := s.buildTaskInfo("master", "task-1", lib.Offer{AgentID: lib.AgentID{Value: "agent-1"}})
+	if len(task.Container.GetVolumes()) != 1 {
+		t.Fatalf("volumes = %d, want 1", len(task.Container.GetVolumes()))
+	}
+	volume := task.Container.GetVolumes()[0]
+	if volume.GetContainerPath() != "/var/lib/valkey" || volume.GetMode() != lib.Volume_RW || volume.GetSource().GetType() != lib.Volume_Source_DOCKER_VOLUME {
+		t.Fatalf("volume = %#v, want RW Docker volume at /var/lib/valkey", volume)
+	}
+	if volume.GetSource().GetDockerVolume().GetDriver() != "convoy" || volume.GetSource().GetDockerVolume().GetName() != "valkey-data" {
+		t.Fatalf("docker volume = %#v, want convoy/valkey-data", volume.GetSource().GetDockerVolume())
+	}
+}
+
+func TestBuildTaskInfoOmitsDockerVolumeWhenNameUnset(t *testing.T) {
+	s := NewScheduler(Config{Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, ValkeyVolumeDriver: "convoy"})
+	task := s.buildTaskInfo("master", "task-1", lib.Offer{AgentID: lib.AgentID{Value: "agent-1"}})
+	if len(task.Container.GetVolumes()) != 0 {
+		t.Fatalf("volumes = %#v, want none when volume name is unset", task.Container.GetVolumes())
+	}
+}
+
+func TestLoadConfigReadsValkeyVolumeSettings(t *testing.T) {
+	t.Setenv("VALKEY_VOLUME_DRIVER", "local")
+	t.Setenv("VALKEY_VOLUME_NAME", "persistent-valkey")
+	t.Setenv("VALKEY_VOLUME_PATH", "/data")
+	c := loadConfig()
+	if c.ValkeyVolumeDriver != "local" || c.ValkeyVolumeName != "persistent-valkey" || c.ValkeyVolumePath != "/data" {
+		t.Fatalf("volume config = (%q, %q, %q), want (local, persistent-valkey, /data)", c.ValkeyVolumeDriver, c.ValkeyVolumeName, c.ValkeyVolumePath)
+	}
+}

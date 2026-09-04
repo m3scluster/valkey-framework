@@ -4,3 +4,4 @@
 .scale-feedback{border:1px solid #493b68;border-radius:7px;margin-bottom:18px;padding:12px 16px;background:#171526;color:#d7caff;font:12px 'DM Mono';}
 .scale-feedback.success{border-color:#3d745f;background:#10231e;color:#9de0bf;}
 .scale-feedback.error{border-color:#824a56;background:#2a171d;color:#ffb2bb;}
+.scale{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap}.scale-group{display:flex;flex-direction:column;gap:8px;min-width:190px}.scale-group .scale-feedback{margin:0}.scale-buttons{display:flex;gap:8px;flex-wrap:wrap}

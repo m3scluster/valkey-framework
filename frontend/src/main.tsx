@@ -5,6 +5,7 @@ import './style.css';
 type Task = { ID: string; Role: string; State: string; Host?: string; Port?: number; Updated?: string };
 type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_masters: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
 type Metrics = { framework_id: string; desired: boolean; total: number; running: number; staging: number; failed: number; valkey?: { available: boolean; error: string; sections: Record<string, Record<string, string | number>> } };
+type ScaleNotification = { type: 'success' | 'error'; message: string; target?: number };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -30,7 +31,8 @@ function App() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [scaleNotification, setScaleNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [masterScaleNotification, setMasterScaleNotification] = useState<ScaleNotification | null>(null);
+  const [slaveScaleNotification, setSlaveScaleNotification] = useState<ScaleNotification | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -99,23 +101,32 @@ function App() {
   const metricsStaging = desired ? (metrics?.staging ?? 0) : 0;
   const metricsFailed = desired ? (metrics?.failed ?? 0) : 0;
 
+  useEffect(() => {
+    if (masterScaleNotification?.type === 'success' && masterScaleNotification.target === actualMasters) {
+      setMasterScaleNotification(null);
+    }
+    if (slaveScaleNotification?.type === 'success' && slaveScaleNotification.target === actualSlaves) {
+      setSlaveScaleNotification(null);
+    }
+  }, [actualMasters, actualSlaves, masterScaleNotification, slaveScaleNotification]);
+
   async function adjustSlaves(delta: number) {
     if (!status) return;
+    const newSlaves = status.slaves + delta;
+    if (newSlaves < status.min_slaves) return;
     setBusy(true);
     setError('');
-    setScaleNotification(null);
+    setSlaveScaleNotification(null);
     try {
-      const newSlaves = status.slaves + delta;
-      if (newSlaves < status.min_slaves) return;
       await api<void>('/api/scale', {
         method: 'POST',
         body: JSON.stringify({ slaves: newSlaves })
       });
-      setScaleNotification({type: 'success', message: `Scaling slaves request accepted. Current target: ${newSlaves}`});
+      setSlaveScaleNotification({ type: 'success', target: newSlaves, message: `Scaling slaves request accepted. Current target: ${newSlaves}` });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Scaling request failed');
-      setScaleNotification({ type: 'error', message: 'Scaling slaves request failed' });
+      setSlaveScaleNotification({ type: 'error', message: 'Scaling slaves request failed' });
     } finally {
       setBusy(false);
     }
@@ -127,14 +138,14 @@ function App() {
     if (newMasters < 1) return;
     setBusy(true);
     setError('');
-    setScaleNotification(null);
+    setMasterScaleNotification(null);
     try {
       await api<void>('/api/scale', { method: 'POST', body: JSON.stringify({ masters: newMasters }) });
-      setScaleNotification({type: 'success', message: `Scaling masters request accepted. Current target: ${newMasters}`});
+      setMasterScaleNotification({ type: 'success', target: newMasters, message: `Scaling masters request accepted. Current target: ${newMasters}` });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Master scaling request failed');
-      setScaleNotification({ type: 'error', message: 'Scaling masters request failed' });
+      setMasterScaleNotification({ type: 'error', message: 'Master scaling request failed' });
     } finally {
       setBusy(false);
     }
@@ -151,12 +162,7 @@ function App() {
     <main>
       <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></header>
       {error && <div className="alert" role="alert">⚠ {error}</div>}
-      {scaleNotification && (
-        <div className={`scale-feedback ${scaleNotification.type}`} role={scaleNotification.type === 'error' ? 'alert' : 'status'} aria-live="polite">
-          {scaleNotification.type === 'success' ? '✓ ' : '✗ '}
-          {scaleNotification.message}
-        </div>
-      )}
+
       {status?.warnings?.map((warning, index) => <div className="alert scheduler-warning" role="alert" key={`${warning}-${index}`}>⚠ {warning}</div>)}
       <section className="hero"><div><span className="eyebrow">VALKEY CLUSTER</span><h2>{!clusterKnown ? 'Loading…' : desired ? 'Running' : 'Stopped'}</h2><p>Managed by the Valkey Scheduler on Apache Mesos.</p></div><div className="hero-stat"><strong>{metricsRunning}<i> / {metricsTotal}</i></strong><span>active nodes</span></div></section>
       <div className="grid">
@@ -171,7 +177,7 @@ function App() {
       </div>
       <section className="metrics-section"><div className="nodes-head"><div><span className="label">VALKEY SDK</span><h3>Live server metrics</h3></div><span className="refresh">INFO via Valkey client</span></div>{metrics?.valkey?.available ? <div className="metric-sections">{Object.entries(metricSections).map(([section, values]) => <article className="card info-card" key={section}><span className="label">{section.toUpperCase()}</span>{Object.entries(values).slice(0, 6).map(([key, value]) => <div className="info-row" key={key}><span title={key}>{key}</span><strong>{typeof value === 'number' ? value.toLocaleString('en-US') : value}</strong>{typeof value === 'number' && <span className="metric-bar"><i style={{ width: `${Math.min(100, Math.max(4, Math.abs(value) % 100))}%` }} /></span>}</div>)}</article>)}</div> : <div className="card metrics-unavailable">Valkey metrics unavailable{metrics?.valkey?.error ? `: ${metrics.valkey.error}` : '.'}</div>}</section>
       <section className="card control"><div><span className="label">DEPLOYMENT</span><h3>Scheduler-managed cluster</h3><p>The scheduler starts and reconciles the Valkey deployment. The dashboard is observing it or requesting a stop.</p></div><div className="scale"><button className="primary" onClick={() => void startCluster()} disabled={busy || !clusterKnown || desired}>{busy ? 'Starting…' : 'Start cluster'}</button><button className="danger" onClick={() => void stopCluster()} disabled={busy || !clusterKnown || !desired}>{busy ? 'Stopping…' : 'Stop cluster'}</button></div></section>
-      <section className="card control"><div><span className="label">SCALING</span><h3>Cluster size</h3><p>This Valkey model requires at least one master and {status?.min_slaves ?? '—'} slave.</p></div><div className="scale"><span className="slave-count" aria-label="Master count">Masters: {actualMasters}</span><button className="secondary" aria-label="Decrease master count" onClick={() => void adjustMasters(-1)} disabled={busy || !clusterKnown || !desired || !status || status.masters <= 1}>− Master</button><button className="secondary" aria-label="Increase master count" onClick={() => void adjustMasters(1)} disabled={busy || !clusterKnown || !desired}>+ Master</button><span className="slave-count" aria-label="Slave count">Slaves: {actualSlaves}</span><button className="secondary" aria-label="Decrease slave count" onClick={() => void adjustSlaves(-1)} disabled={busy || !clusterKnown || !desired || !status || status.slaves <= status.min_slaves}>− Slave</button><button className="secondary" aria-label="Increase slave count" onClick={() => void adjustSlaves(1)} disabled={busy || !clusterKnown || !desired}>+ Slave</button></div></section>
+      <section className="card control"><div><span className="label">SCALING</span><h3>Cluster size</h3><p>This Valkey model requires at least one master and {status?.min_slaves ?? '—'} slave.</p></div><div className="scale"><div className="scale-group"><span className="slave-count" aria-label="Master count">Masters: {actualMasters}</span>{masterScaleNotification && <div className={`scale-feedback ${masterScaleNotification.type}`} role={masterScaleNotification.type === 'error' ? 'alert' : 'status'} aria-live="polite">{masterScaleNotification.type === 'success' ? '✓ ' : '✗ '}{masterScaleNotification.message}</div>}<div className="scale-buttons"><button className="secondary" aria-label="Decrease master count" onClick={() => void adjustMasters(-1)} disabled={busy || !clusterKnown || !desired || !status || status.masters <= 1}>− Master</button><button className="secondary" aria-label="Increase master count" onClick={() => void adjustMasters(1)} disabled={busy || !clusterKnown || !desired}>+ Master</button></div></div><div className="scale-group"><span className="slave-count" aria-label="Slave count">Slaves: {actualSlaves}</span>{slaveScaleNotification && <div className={`scale-feedback ${slaveScaleNotification.type}`} role={slaveScaleNotification.type === 'error' ? 'alert' : 'status'} aria-live="polite">{slaveScaleNotification.type === 'success' ? '✓ ' : '✗ '}{slaveScaleNotification.message}</div>}<div className="scale-buttons"><button className="secondary" aria-label="Decrease slave count" onClick={() => void adjustSlaves(-1)} disabled={busy || !clusterKnown || !desired || !status || status.slaves <= status.min_slaves}>− Slave</button><button className="secondary" aria-label="Increase slave count" onClick={() => void adjustSlaves(1)} disabled={busy || !clusterKnown || !desired}>+ Slave</button></div></div></div></section>
       <section className="nodes-head"><div><span className="label">INSTANCES</span><h3>Valkey Nodes</h3></div><span className="refresh">Refreshes every 5 seconds</span></section>
       <div className="node-grid">{tasks.length ? tasks.map(task => <article className="node card" key={task.ID}><div className="node-top"><ValkeyClusterMark /><span className="badge running">RUNNING</span></div><h3>{task.Role}</h3><p>{task.Host || 'Mesos Agent'}</p><div className="node-data"><span>PORT <b>{task.Port ?? '—'}</b></span><span>UPDATED <b>{task.Updated ? new Date(task.Updated).toLocaleTimeString('en-US') : '—'}</b></span></div></article>) : <div className="empty card">No running nodes. The scheduler is waiting for Mesos Offers.</div>}</div>
     </main>

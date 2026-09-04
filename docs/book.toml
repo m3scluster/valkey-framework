@@ -1,0 +1,9 @@
+[book]
+title = "Valkey Mesos Control Plane Documentation"
+description = "Documentation for the Valkey Mesos Control Plane framework"
+authors = ["Valkey Mesos Control Plane Team"]
+language = "en"
+
+[build]
+build-dir = "book"
+create-missing = false

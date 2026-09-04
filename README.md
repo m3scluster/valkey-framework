@@ -1,11 +1,11 @@
 # Valkey Mesos Control Plane
 
-Zweiteilige Referenzimplementierung:
+Dual implementation reference:
 
-- `backend/app.go`: Prozessstart, HTTP-Server und Lifecycle.
-- `backend/init.go`: zentrale Initialisierung aller Environment-Variablen über `init()`.
-- `backend/main.go`: API, Domänenmodelle und Mesos-Abstraktion.
-- `frontend/`: React/Vite-Administrationsoberfläche mit Live-Polling.
+- `backend/app.go`: Process start, HTTP server and lifecycle.
+- `backend/init.go`: Central initialization of all environment variables via `init()`.
+- `backend/main.go`: API, domain models and Mesos abstraction.
+- `frontend/`: React/Vite administration frontend with live polling.
 
 ## Start
 
@@ -13,25 +13,25 @@ Zweiteilige Referenzimplementierung:
 make run
 ```
 
-Das startet Backend auf `http://localhost:8080` und Frontend auf `http://localhost:5173`. Für einen sicheren lokalen Test läuft der Backend-Scheduler standardmäßig in `DRY_RUN=true`; Nodes und Skalierung sind dann deterministisch sichtbar, werden aber nicht auf Mesos gestartet.
+This starts the backend on `http://localhost:8080` and frontend on `http://localhost:5173`. For a secure local test, the backend scheduler runs by default in `DRY_RUN=true`; nodes and scaling are then deterministically visible, but not actually started on Mesos.
 
-Für den Testcluster können Credentials ausschließlich über die Shell gesetzt werden:
+For the test cluster, credentials can only be set via shell:
 
 ```bash
-MESOS_MASTER=devtest.lab.internal:5050 MESOS_USERNAME=mesos MESOS_PASSWORD="$MESOS_PASSWORD" DRY_RUN=true make run
+MESOS_MASTER=mesos.example.test:5050 MESOS_USERNAME=example-user MESOS_PASSWORD="$MESOS_PASSWORD" DRY_RUN=true make run
 ```
 
-`DRY_RUN=false` aktiviert die explizite Produktions-Seam. Die Mesos-v1-Framework-Registrierung/Streaming-Integration ist noch bewusst nicht aktiviert; der Backend-Start bricht bei einer Skalierung mit einer erklärenden Fehlermeldung ab, statt einen erfolgreichen Deployment-Status vorzutäuschen.
+`DRY_RUN=false` activates the explicit production seam. The Mesos-v1 framework registration/streaming integration is intentionally not yet activated; the backend startup will fail with an explanatory error message on scaling instead of pretending to have a successful deployment status.
 
 ## API
 
 - `GET /api/health`
 - `GET /api/cluster`
-- `PUT /api/cluster/scale` mit `{ "nodes": 3..100 }`
+- `PUT /api/cluster/scale` with `{ "nodes": 3..100 }`
 - `GET /api/metrics`
 
-Die Metrics melden im Dry-Run explizit `unknown_no_valkey_endpoint`, weil keine echten Valkey-Prozesse laufen. Sobald Mesos-Task-Status und Endpoints integriert sind, fragt der Backend-Metrics-Collector Valkey `INFO` über TCP ab.
+The metrics explicitly report `unknown_no_valkey_endpoint` in dry-run mode because no real Valkey processes are running. Once Mesos task status and endpoints are integrated, the backend metrics collector will query Valkey `INFO` via TCP.
 
-## Grundlage
+## Foundation
 
-Die Scheduler-Struktur orientiert sich an [m3scluster/compose](https://github.com/m3scluster/compose): Framework-/Mesos-Client hinter Interface, Reconciliation als Quelle für die gewünschte Task-Anzahl, sowie offer-/task-orientiertes Scheduling. Die externe Integration bleibt von der lokalen Dry-Run-Implementierung getrennt.
+The scheduler structure is based on [m3scluster/compose](https://github.com/m3scluster/compose): Framework/Mesos client behind an interface, reconciliation as source for desired task count, and offer-/task-oriented scheduling. The external integration remains separate from the local dry-run implementation.

@@ -109,12 +109,9 @@ func loadConfig() Config {
 		cni = value
 	}
 	domainDefault := "mesos"
-	if cni == "weave" {
-		domainDefault = "weave.local"
-	}
 	domain := strings.Trim(utils.Getenv("MESOS_DOMAIN", domainDefault), ".")
-	// Mesos-DNS uses the task hostname and domain; the framework name is not part
-	// of the DNS name (for example, master.weave.local).
+	// Mesos-DNS uses the task hostname and explicitly configured domain; the
+	// framework name is not part of the DNS name.
 	masterHost := "master"
 	if domain != "" {
 		masterHost += "." + domain

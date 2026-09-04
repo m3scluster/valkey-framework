@@ -130,6 +130,15 @@ func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDoesNotInferDomainFromCNI(t *testing.T) {
+	t.Setenv("MESOS_CNI", "weave")
+	t.Setenv("MESOS_DOMAIN", "")
+	c := loadConfig()
+	if c.Domain != "mesos" || c.MasterHost != "master.mesos" {
+		t.Fatalf("CNI-derived domain = (%q, %q), want (mesos, master.mesos)", c.Domain, c.MasterHost)
+	}
+}
+
 func TestLoadConfigUsesFrontendURL(t *testing.T) {
 	t.Setenv("FRONTEND_URL", "")
 	c := loadConfig()

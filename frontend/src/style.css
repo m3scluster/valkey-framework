@@ -79,6 +79,11 @@ body {
 .shell[data-theme="light"] .info-row,.shell[data-theme="light"] .node-data{border-color:#d0d5dc;color:#4b5563}
 .shell[data-theme="light"] .node-data b{color:#1f2937}
 .shell[data-theme="light"] .theme-toggle{border-color:#929aa7;background:#fff;color:#4b3a82}
+.shell[data-theme="light"] button{background:#8d63dc;color:#fff}
+.shell[data-theme="light"] button:hover:not(:disabled){background:#7347c5}
+.shell[data-theme="light"] button.danger{background:#cf3f73;color:#fff}
+.shell[data-theme="light"] button.danger:hover:not(:disabled){background:#b52d5d}
+.shell[data-theme="light"] .badge.running{color:#51318f;border-color:#8d63dc;background:#eee5ff}
 .shell[data-theme="light"] .alert{background:#fff1f5;border-color:#d68aa4;color:#8b3150}
 .shell[data-theme="light"] .scale-feedback{background:#f7f4ff;border-color:#cfc6e3;color:#54447e}
 @media(max-width:760px){.header-actions{align-items:flex-start;flex-direction:column;gap:10px}}

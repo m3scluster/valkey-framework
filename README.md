@@ -19,8 +19,6 @@ This starts the backend on `http://localhost:8080` and frontend on `http://local
 
 The React dashboard provides a live cluster overview, node resource details, scheduler events, and explicit start/stop and scaling controls.
 
-![Valkey Control Plane dashboard overview](docs/src/assets/dashboard.svg)
-
 For the test cluster, credentials can only be set via shell:
 
 ```bash

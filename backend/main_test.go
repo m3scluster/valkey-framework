@@ -714,3 +714,33 @@ func TestLoadConfigReadsValkeyVolumeSettings(t *testing.T) {
 		t.Fatalf("volume config = (%q, %q, %q), want (local, persistent-valkey, /data)", c.ValkeyVolumeDriver, c.ValkeyVolumeName, c.ValkeyVolumePath)
 	}
 }
+
+func TestBuildTaskInfoUsesSeparateValkeyAuthentication(t *testing.T) {
+	s := NewScheduler(Config{Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, MasterHost: "master.mesos", ValkeyPassword: "client-secret", ValkeyReplicationPassword: "replica-secret"})
+	master := s.buildTaskInfo("master", "master-1", lib.Offer{})
+	slave := s.buildTaskInfo("slave-1", "slave-1-1", lib.Offer{})
+	if master.Command.GetValue() != "valkey-server --port 6379 --requirepass client-secret" {
+		t.Fatalf("master command = %q", master.Command.GetValue())
+	}
+	wantSlave := "valkey-server --port 6379 --requirepass client-secret --replicaof master.mesos 6379 --masterauth replica-secret"
+	if slave.Command.GetValue() != wantSlave {
+		t.Fatalf("slave command = %q, want %q", slave.Command.GetValue(), wantSlave)
+	}
+}
+
+func TestBuildTaskInfoOmitsValkeyAuthenticationWhenUnset(t *testing.T) {
+	s := NewScheduler(Config{Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, MasterHost: "master.mesos"})
+	task := s.buildTaskInfo("slave-1", "slave-1-1", lib.Offer{})
+	if strings.Contains(task.Command.GetValue(), "requirepass") || strings.Contains(task.Command.GetValue(), "masterauth") {
+		t.Fatalf("unauthenticated command = %q", task.Command.GetValue())
+	}
+}
+
+func TestLoadConfigReadsValkeyAuthentication(t *testing.T) {
+	t.Setenv("VALKEY_PASSWORD", "client-secret")
+	t.Setenv("VALKEY_REPLICATION_PASSWORD", "replica-secret")
+	c := loadConfig()
+	if c.ValkeyPassword != "client-secret" || c.ValkeyReplicationPassword != "replica-secret" {
+		t.Fatalf("Valkey auth config = (%q, %q)", c.ValkeyPassword, c.ValkeyReplicationPassword)
+	}
+}

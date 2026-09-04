@@ -20,8 +20,14 @@ func scalar(name string, v float64) lib.Resource {
 }
 func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	cmd := fmt.Sprintf("valkey-server --port %d", s.cfg.Port)
+	if s.cfg.ValkeyPassword != "" {
+		cmd += " --requirepass " + s.cfg.ValkeyPassword
+	}
 	if !isMasterRole(role) {
 		cmd += fmt.Sprintf(" --replicaof %s %d", s.cfg.MasterHost, s.cfg.Port)
+		if s.cfg.ValkeyReplicationPassword != "" {
+			cmd += " --masterauth " + s.cfg.ValkeyReplicationPassword
+		}
 	}
 	shell := true
 	image := s.cfg.Image

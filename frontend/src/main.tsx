@@ -137,7 +137,11 @@ function App() {
   // desired values returned by /api/status.
   const actualMasters = tasks.filter(task => task.Role === 'master' || task.Role.startsWith('master-')).length;
   const actualSlaves = tasks.filter(task => task.Role.startsWith('slave-')).length;
-  const metricsTotal = desired ? running : 0;
+  // The denominator must include every live task, not only TASK_RUNNING.
+  // Redis-backed scheduler state can contain nodes that are still staging or
+  // starting; those nodes are already part of the cluster even though they
+  // are not counted as active yet.
+  const metricsTotal = desired ? (metrics?.total ?? liveTasks.length) : 0;
   const metricsStaging = desired ? (metrics?.staging ?? 0) : 0;
   const metricsFailed = desired ? (metrics?.failed ?? 0) : 0;
 

@@ -57,6 +57,7 @@ func TestSchedulerHTTPTransport(t *testing.T) {
 		Role:        "*",
 		Password:    "test-password",
 		RedisServer: "127.0.0.1:1",
+		FrontendURL: "https://frontend.example:5173",
 	})
 	response, err := s.caller.Call(context.Background(), calls.Subscribe(s.framework))
 	if err != nil {
@@ -79,6 +80,9 @@ func TestSchedulerHTTPTransport(t *testing.T) {
 	}
 	if request.call.GetSubscribe().GetFrameworkInfo().GetName() != "test-framework" {
 		t.Fatalf("framework name = %q, want test-framework", request.call.GetSubscribe().GetFrameworkInfo().GetName())
+	}
+	if got := request.call.GetSubscribe().GetFrameworkInfo().GetWebUiURL(); got != "https://frontend.example:5173" {
+		t.Fatalf("framework web UI URL = %q, want https://frontend.example:5173", got)
 	}
 	if request.auth == "" {
 		t.Fatal("expected Basic Auth header")

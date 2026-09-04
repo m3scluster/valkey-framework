@@ -92,6 +92,20 @@ func TestLoadConfigUsesConfigurableDomain(t *testing.T) {
 	}
 }
 
+func TestLoadConfigUsesFrontendURL(t *testing.T) {
+	t.Setenv("FRONTEND_URL", "")
+	c := loadConfig()
+	if c.FrontendURL != "http://localhost:5173" {
+		t.Fatalf("FrontendURL = %q, want http://localhost:5173 (default)", c.FrontendURL)
+	}
+
+	t.Setenv("FRONTEND_URL", "https://admin.example.com")
+	c = loadConfig()
+	if c.FrontendURL != "https://admin.example.com" {
+		t.Fatalf("FrontendURL = %q, want https://admin.example.com (from env)", c.FrontendURL)
+	}
+}
+
 func TestLoadConfigParsesRedisPoolSize(t *testing.T) {
 	t.Setenv("REDIS_SERVER", "redis.example:6380")
 	t.Setenv("REDIS_PASSWORD", "secret")
@@ -120,6 +134,23 @@ func TestLoadConfigUsesRedisDefaults(t *testing.T) {
 	c := loadConfig()
 	if c.RedisServer != "127.0.0.1:6379" || c.RedisPassword != "" || c.RedisDB != 1 || c.RedisPoolSize != 0 {
 		t.Fatalf("Redis config defaults = (%q, %q, %d, %d), want (127.0.0.1:6379, empty, 1, 0)", c.RedisServer, c.RedisPassword, c.RedisDB, c.RedisPoolSize)
+	}
+}
+
+func TestNewSchedulerSetsFrameworkInfoWebUiURL(t *testing.T) {
+	c := Config{Name: "test", Image: "valkey:test", CPU: .2, Memory: 128, Port: 6379, CNI: "weave", Domain: "weave.local", MasterHost: "master.weave.local", FrontendURL: "https://custom.example.com"}
+	s := NewScheduler(c)
+	if s.framework.WebUiURL == nil {
+		t.Fatal("FrameworkInfo WebUiURL should be set with custom value")
+	}
+	if *s.framework.WebUiURL != "https://custom.example.com" {
+		t.Fatalf("FrameworkInfo WebUiURL = %q, want https://custom.example.com (custom)", *s.framework.WebUiURL)
+	}
+
+	c.FrontendURL = ""
+	s = NewScheduler(c)
+	if s.framework.WebUiURL != nil {
+		t.Fatalf("FrameworkInfo WebUiURL should be nil when empty string passed")
 	}
 }
 

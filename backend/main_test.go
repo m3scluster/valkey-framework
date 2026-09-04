@@ -12,7 +12,45 @@ import (
 
 	lib "github.com/m3scluster/clusterd-go/api/v1/lib"
 	"github.com/m3scluster/clusterd-go/api/v1/lib/scheduler"
+	logrus "github.com/sirupsen/logrus"
 )
+
+type startupLogHook struct {
+	entry *logrus.Entry
+}
+
+func (h *startupLogHook) Levels() []logrus.Level { return logrus.AllLevels }
+
+func (h *startupLogHook) Fire(entry *logrus.Entry) error {
+	h.entry = entry
+	return nil
+}
+
+func TestStartupLogMetadata(t *testing.T) {
+	logger := logrus.StandardLogger()
+	oldHooks := logger.Hooks
+	logger.ReplaceHooks(make(logrus.LevelHooks))
+	defer logger.ReplaceHooks(oldHooks)
+	hook := &startupLogHook{}
+	logger.AddHook(hook)
+
+	logStartup(Config{Master: "https://mesos.example:5050"})
+	if hook.entry == nil {
+		t.Fatal("startup log entry was not emitted")
+	}
+	if hook.entry.Message != "scheduler starting" {
+		t.Fatalf("startup log message = %q, want scheduler starting", hook.entry.Message)
+	}
+	if got := hook.entry.Data["program"]; got != programName {
+		t.Fatalf("program metadata = %v, want %q", got, programName)
+	}
+	if got := hook.entry.Data["version"]; got != version || got == "" {
+		t.Fatalf("version metadata = %v, want non-empty build version %q", got, version)
+	}
+	if got := hook.entry.Data["mesos_master"]; got != "https://mesos.example:5050" {
+		t.Fatalf("Mesos master metadata = %v, want configured URL", got)
+	}
+}
 
 func TestSchedulerRegistrationTokensBackoffReconnects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

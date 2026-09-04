@@ -70,6 +70,21 @@ type Scheduler struct {
 	metricsReader    valkeyMetricsReader
 }
 
+const programName = "valkey-mesos-framework"
+
+// version is replaced by the release build with -ldflags
+// "main.version=<version>". Keeping a development default makes local builds
+// self-describing as well.
+var version = "dev"
+
+func logStartup(c Config) {
+	logrus.WithFields(logrus.Fields{
+		"program":      programName,
+		"version":      version,
+		"mesos_master": c.Master,
+	}).Info("scheduler starting")
+}
+
 func atoi(k string, d int) int {
 	v, e := strconv.Atoi(utils.Getenv(k, strconv.Itoa(d)))
 	if e != nil {
@@ -247,6 +262,7 @@ func parseValkeyInfo(raw string) map[string]map[string]any {
 
 func main() {
 	c := loadConfig()
+	logStartup(c)
 	s := NewScheduler(c)
 
 	if c.SSLKeyBase64 != "" && c.SSLCertBase64 != "" {

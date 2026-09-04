@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,22 @@ import (
 func scalar(name string, v float64) lib.Resource {
 	return lib.Resource{Name: name, Type: lib.SCALAR, Scalar: &lib.Value_Scalar{Value: v}}
 }
+
+func offerAgentURL(o lib.Offer) string {
+	if o.URL == nil || strings.TrimSpace(o.URL.Scheme) == "" {
+		return ""
+	}
+	host := o.URL.Address.GetHostname()
+	if host == "" {
+		host = o.URL.Address.GetIP()
+	}
+	port := o.URL.Address.GetPort()
+	if host == "" || port <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s://%s", o.URL.Scheme, net.JoinHostPort(host, strconv.Itoa(int(port))))
+}
+
 func (s *Scheduler) buildTaskInfo(role, id string, o lib.Offer) lib.TaskInfo {
 	cmd := fmt.Sprintf("valkey-server --port %d", s.cfg.Port)
 	if s.cfg.ValkeyPassword != "" {
@@ -280,10 +297,7 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 			if err == nil {
 				s.mu.Lock()
 				s.resourceShortage = false
-				agentURL := ""
-				if o.URL != nil {
-					agentURL = fmt.Sprintf("%s://%s:%d", o.URL.Scheme, o.URL.Address.GetHostname(), o.URL.Address.GetPort())
-				}
+				agentURL := offerAgentURL(o)
 				s.tasks[id] = &Task{ID: id, Role: role, State: "TASK_STAGING", Agent: o.AgentID.Value, Host: o.Hostname, AgentURL: agentURL, Port: s.cfg.Port, CPU: s.cfg.CPU, Memory: s.cfg.Memory, Disk: s.cfg.Disk, Updated: time.Now()}
 				s.mu.Unlock()
 				s.save()

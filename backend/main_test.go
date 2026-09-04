@@ -794,6 +794,45 @@ func TestTaskUsageReadsMesosAgentStatistics(t *testing.T) {
 	}
 }
 
+func TestTaskUsageFallsBackToPersistedTaskHost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/monitor/statistics" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[{"executor_id":"task-1","framework_id":"framework-1","statistics":{"cpus_limit":0.2,"mem_rss_bytes":10485760}}]`))
+	}))
+	defer server.Close()
+
+	// The fallback targets the standard Mesos port; replace the test host
+	// transport so the request remains local and deterministic.
+	client := server.Client()
+	client.Transport = rewriteAgentPortTransport{base: client.Transport, target: server.URL}
+	s := &Scheduler{mesosHTTPClient: client}
+	usage, err := s.taskUsage(context.Background(), &Task{ID: "task-1", Host: "agent.example"}, "framework-1")
+	if err != nil {
+		t.Fatalf("taskUsage host fallback: %v", err)
+	}
+	if usage["usage_available"] != true {
+		t.Fatalf("host fallback usage = %#v", usage)
+	}
+}
+
+type rewriteAgentPortTransport struct {
+	base   http.RoundTripper
+	target string
+}
+
+func (t rewriteAgentPortTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	target, err := http.NewRequestWithContext(request.Context(), request.Method, t.target+request.URL.Path, request.Body)
+	if err != nil {
+		return nil, err
+	}
+	clone.URL = target.URL
+	clone.Host = target.Host
+	return t.base.RoundTrip(clone)
+}
+
 func TestTaskUsageFallsBackToUniqueFrameworkExecutorStatistics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"executor_id":"command","source":"command","framework_id":"framework-1","statistics":{"cpus_limit":0.2,"mem_rss_bytes":5242880}}]`))

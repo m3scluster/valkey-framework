@@ -12,6 +12,20 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+func TestOfferAgentURLUsesHostnameOrIP(t *testing.T) {
+	hostname := "agent.example"
+	ip := "192.0.2.10"
+	withHostname := lib.Offer{URL: &lib.URL{Scheme: "http", Address: lib.Address{Hostname: &hostname, Port: 5051}}}
+	withIP := lib.Offer{URL: &lib.URL{Scheme: "http", Address: lib.Address{IP: &ip, Port: 5051}}}
+
+	if got := offerAgentURL(withHostname); got != "http://agent.example:5051" {
+		t.Fatalf("hostname URL = %q", got)
+	}
+	if got := offerAgentURL(withIP); got != "http://192.0.2.10:5051" {
+		t.Fatalf("IP URL = %q", got)
+	}
+}
+
 type recordingCaller struct {
 	mu    sync.Mutex
 	calls []*scheduler.Call

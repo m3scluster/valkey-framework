@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -37,10 +38,21 @@ func taskStatisticsUsage(item mesosTaskStatistics) map[string]any {
 }
 
 func (s *Scheduler) taskUsage(ctx context.Context, task *Task, frameworkID string) (map[string]any, error) {
-	if task.AgentURL == "" || s.mesosHTTPClient == nil {
+	agentURL := task.AgentURL
+	if agentURL == "" && task.Host != "" {
+		// Older persisted task records did not store Offer.URL. Mesos agents
+		// expose their HTTP API on 5051 by default, so recover the endpoint
+		// from the task's authoritative hostname instead of losing metrics.
+		scheme := "http"
+		if strings.HasPrefix(strings.ToLower(s.cfg.Master), "https://") {
+			scheme = "https"
+		}
+		agentURL = scheme + "://" + net.JoinHostPort(task.Host, "5051")
+	}
+	if agentURL == "" || s.mesosHTTPClient == nil {
 		return nil, fmt.Errorf("Mesos agent URL is unavailable")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(task.AgentURL, "/")+"/monitor/statistics", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(agentURL, "/")+"/monitor/statistics", nil)
 	if err != nil {
 		return nil, err
 	}

@@ -222,6 +222,15 @@ func (s *Scheduler) handleEvent(ctx context.Context, e *scheduler.Event) error {
 			s.mu.Unlock()
 			s.save()
 		}
+		// Redis may contain task records from while the framework was
+		// disconnected. Reconcile immediately after subscribing so Mesos can
+		// report records that disappeared instead of waiting for the periodic
+		// reconciliation interval.
+		if s.hasTrackedTasks() {
+			if err := s.reconcileTrackedTasks(ctx); err != nil {
+				logrus.WithError(err).Warn("initial scheduler reconcile failed")
+			}
+		}
 	case scheduler.Event_OFFERS:
 		callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -280,6 +289,34 @@ func isTerminalTaskState(state string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Scheduler) hasTrackedTasks() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, task := range s.tasks {
+		if !isTerminalTaskState(task.State) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scheduler) reconcileTrackedTasks(ctx context.Context) error {
+	s.mu.Lock()
+	frameworkID := s.frameworkID
+	tasks := make(map[string]string, len(s.tasks))
+	for id, task := range s.tasks {
+		if !isTerminalTaskState(task.State) {
+			tasks[id] = task.Agent
+		}
+	}
+	s.mu.Unlock()
+	if frameworkID == "" || len(tasks) == 0 || s.caller == nil {
+		return nil
+	}
+	call := calls.Reconcile(calls.ReconcileTasks(tasks)).With(calls.Framework(frameworkID))
+	return calls.CallNoData(ctx, s.caller, call)
 }
 
 func (s *Scheduler) start() {
@@ -511,20 +548,7 @@ func (s *Scheduler) reconcileLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			s.mu.Lock()
-			frameworkID := s.frameworkID
-			tasks := make(map[string]string, len(s.tasks))
-			for id, task := range s.tasks {
-				if !isTerminalTaskState(task.State) {
-					tasks[id] = task.Agent
-				}
-			}
-			s.mu.Unlock()
-			if frameworkID == "" {
-				continue
-			}
-			call := calls.Reconcile(calls.ReconcileTasks(tasks)).With(calls.Framework(frameworkID))
-			if err := calls.CallNoData(ctx, s.caller, call); err != nil && ctx.Err() == nil {
+			if err := s.reconcileTrackedTasks(ctx); err != nil && ctx.Err() == nil {
 				logrus.WithError(err).Warn("scheduler reconcile failed")
 			}
 		case <-ctx.Done():

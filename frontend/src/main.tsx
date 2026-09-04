@@ -6,6 +6,17 @@ type Task = { ID: string; Role: string; State: string; Host?: string; Port?: num
 type Status = { framework_id: string; desired: boolean; masters: number; slaves: number; min_masters: number; min_slaves: number; warnings?: string[]; tasks: Record<string, Task> };
 type Metrics = { framework_id: string; desired: boolean; total: number; running: number; staging: number; failed: number; valkey?: { available: boolean; error: string; sections: Record<string, Record<string, string | number>> } };
 type ScaleNotification = { type: 'success' | 'error'; message: string; target?: number };
+type Theme = 'dark' | 'light';
+
+const THEME_STORAGE_KEY = 'valkey-control-plane-theme';
+
+function readStoredTheme(): Theme {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -27,12 +38,21 @@ function ValkeyClusterMark() {
 }
 
 function App() {
+  const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const [status, setStatus] = useState<Status | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [masterScaleNotification, setMasterScaleNotification] = useState<ScaleNotification | null>(null);
   const [slaveScaleNotification, setSlaveScaleNotification] = useState<ScaleNotification | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Storage can be disabled by the browser; the in-memory preference still works.
+    }
+  }, [theme]);
 
   const load = useCallback(async () => {
     try {
@@ -153,14 +173,14 @@ function App() {
 
   const metricSections = metrics?.valkey?.sections ?? {};
 
-  return <div className="shell">
+  return <div className="shell" data-theme={theme}>
     <aside>
       <div className="brand"><ValkeyClusterMark /><div><b>VALKEY</b><small>CONTROL PLANE</small></div></div>
       <nav><a className="active">◈ Overview</a><a>◌ Nodes</a><a>⌁ Events</a></nav>
       <div className="sidefoot"><span className="pulse" /> Mesos connected</div>
     </aside>
     <main>
-      <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></header>
+      <header><div><p className="eyebrow">PLATFORM / MESOS</p><h1>Cluster Overview</h1></div><div className="header-actions"><label className="theme-picker">Theme<select aria-label="Choose color theme" value={theme} onChange={event => setTheme(event.target.value as Theme)}><option value="dark">Dark</option><option value="light">Light</option></select></label><div className="header-meta"><span className="live-dot" /> LIVE <span className="divider" /> {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div></div></header>
       {error && <div className="alert" role="alert">⚠ {error}</div>}
 
       {status?.warnings?.map((warning, index) => <div className="alert scheduler-warning" role="alert" key={`${warning}-${index}`}>⚠ {warning}</div>)}
